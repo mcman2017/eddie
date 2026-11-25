@@ -4,6 +4,7 @@
     python -m eddie.cli llm ping --region R1.triage --effort minimal --max-output-tokens 16
     python -m eddie.cli index build|stats|search|show|validate-spine
     python -m eddie.cli sandbox run SCRIPT.py
+    python -m eddie.cli cone build|stats, plan-budget, build-landscape, seed-demo
 """
 
 from __future__ import annotations
@@ -493,6 +494,37 @@ def cmd_plan_budget(args: argparse.Namespace) -> int:
     return 0
 
 
+# --- build-landscape ----------------------------------------------------------------------------
+
+
+def cmd_build_landscape(args: argparse.Namespace) -> int:
+    from dataclasses import replace
+
+    from eddie.planner.zeta_landscape import Params, build_landscape
+
+    settings = load_settings()
+    cone = Path(args.cone) if args.cone else settings.data_dir / "index" / "eddie_cone.sqlite"
+    if not cone.exists():
+        raise ConfigError(f"no cone at {cone}: run `python -m eddie.cli cone build` first")
+    params = Params.quick() if args.quick else Params()
+    if args.t_max is not None:
+        step = params.t_max / (params.t_steps - 1)
+        params = replace(params, t_max=args.t_max, t_steps=round(args.t_max / step) + 1)
+    if args.bands is not None:
+        params = replace(params, bands=args.bands)
+    if args.surrogates is not None:
+        params = replace(params, surrogates=args.surrogates)
+    out = Path(args.out) if args.out else paths.landscape_dir()
+    try:
+        report = build_landscape(Path(args.index) if args.index else settings.index_path, cone, out, params, log=_out)
+    except RuntimeError as exc:
+        raise ConfigError(str(exc)) from exc
+    for f in report["findings"]:
+        _out(f"finding   [{f['status']}] {f['headline']}")
+    _out("landscape $0: zeta by mpmath, the proof wave from the index and cone; no model was called")
+    return 0
+
+
 # --- seed-demo --------------------------------------------------------------------------------
 
 
@@ -648,6 +680,16 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--out")
     p.add_argument("--no-db", action="store_true", help="do not load the queue into eddie_artifacts.sqlite")
     p.set_defaults(func=cmd_plan_budget)
+
+    p = sub.add_parser("build-landscape", help="$0 zeta terrain + the proof's Dirichlet wave for the 3D critical strip")
+    p.add_argument("--index")
+    p.add_argument("--cone")
+    p.add_argument("--out", help="output directory (default data/index/landscape)")
+    p.add_argument("--quick", action="store_true", help="tiny grids (a second); for smoke tests")
+    p.add_argument("--t-max", type=float, help="top of the box (default 60)")
+    p.add_argument("--bands", type=int, help="harmonic bands (default 8)")
+    p.add_argument("--surrogates", type=int, help="torus surrogates for the chance baseline (default 199, 0 skips)")
+    p.set_defaults(func=cmd_build_landscape)
 
     p = sub.add_parser("seed-demo", help="$0 sandbox witnesses for the explorer (labeled seed, never Ember)")
     p.add_argument("--cone")
