@@ -179,7 +179,17 @@ async function main() {
   check(Math.hypot(third[0] - after[0], third[1] - after[1], third[2] - after[2]) > 0.5, "Next moved the camera");
   await shot("11-chapter-after-click");
 
-  // 5) frame pacing (software GL here: an upper bound on trouble, not a prediction)
+  // 5) the synth and the tour run from their buttons
+  check(await click(".strip-actions .play"), "clicked Play spectral harmonics");
+  await until("/Zero 1 of 12: t = 14\\.1347, sounding at 372 Hz/.test(document.querySelector('.strip-hud')?.textContent ?? '')", "the first zero to sound at its mapped pitch");
+  await until("/Zero 2 of 12/.test(document.querySelector('.strip-hud')?.textContent ?? '')", "the second partial to enter");
+  check(await click(".strip-actions .play"), "stopped the chord");
+  check(await click(".strip-cams button:nth-child(4)"), "started the tour");
+  await until(`document.querySelector('[data-testid=chapter-guide]')?.dataset.slug === ${JSON.stringify(chapters[0][0])}`, "the tour to open chapter 1");
+  await until(`document.querySelector('[data-testid=chapter-guide]')?.dataset.slug === ${JSON.stringify(chapters[1][0])}`, "the tour to move on to chapter 2");
+  check(await click(".strip-cams button:nth-child(4)"), "stopped the tour");
+
+  // 6) frame pacing (software GL here: an upper bound on trouble, not a prediction)
   const frames = await evaluate("new Promise((done) => { const t = []; const step = (now) => { t.push(now); if (t.length < 90) requestAnimationFrame(step); else { const d = t.slice(1).map((v, i) => v - t[i]).sort((a, b) => a - b); done({ median: d[Math.floor(d.length / 2)], p95: d[Math.floor(d.length * 0.95)] }); } }; requestAnimationFrame(step); })");
   console.log(`note frame time on ${gl}: median ${frames.median.toFixed(1)} ms, p95 ${frames.p95.toFixed(1)} ms`);
 
