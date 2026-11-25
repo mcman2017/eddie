@@ -1,0 +1,59 @@
+# ---------------------------------------------------------------------------
+# Copyright / licensing compliance: the Lean archive, its parts, extracted
+# sources and every derived database stay local. Never commit them.
+# ---------------------------------------------------------------------------
+*.lean
+*.olean
+*.ilean
+.lake/
+lake-packages/
+*.tar*
+*.tgz
+*.zst
+*.partial
+/data/*
+!/data/README.md
+
+# Local databases (ledger, shadow ledger, index) and their WAL/SHM files
+*.sqlite
+*.sqlite-*
+*.sqlite3
+*.db
+*.db-*
+
+# Secrets and local configuration
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+CLAUDE.local.md
+
+# Private planning notes (never published)
+initial-prompt.md
+
+# Telemetry exports (copied in deliberately at submission time, if ever)
+exports/
+eddie_ember_telemetry.json
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+*.egg-info/
+build/
+dist/
+
+# Node / web
+node_modules/
+web/dist/
+*.tsbuildinfo
+
+# Editors / OS
+.DS_Store
+.idea/
+.vscode/
+*.swp
