@@ -435,6 +435,58 @@ def cmd_cone_stats(args: argparse.Namespace) -> int:
     return 0
 
 
+# --- plan-budget ------------------------------------------------------------------------------
+
+
+def cmd_plan_budget(args: argparse.Namespace) -> int:
+    from dataclasses import replace
+
+    from eddie.llm.telemetry import write_json_atomic
+    from eddie.planner.budget import PlanParams, build_plan
+    from eddie.state.artifacts import ArtifactStore
+
+    settings = load_settings()
+    base = PlanParams()
+    params = replace(
+        base,
+        target_usd=args.target_usd,
+        tier2_usd=args.tier2_usd,
+        reserve_demo_usd=args.reserve_demo_usd,
+        lifetime_cap_usd=float(nano_to_usd(settings.lifetime_cap_nano)),
+        daily_cap_usd=float(nano_to_usd(settings.daily_cap_nano)),
+        concurrency=args.concurrency,
+        fit=args.fit,
+        start_date=args.start_date or "",
+        worker=replace(base.worker, max_output=args.worker_max_output),
+        critic=replace(base.critic, max_output=args.critic_max_output),
+        arbiter=replace(base.arbiter, max_output=args.arbiter_max_output, effort=args.arbiter_effort),
+        consolidator=replace(base.consolidator, max_output=args.consolidator_max_output),
+        triage=replace(base.triage, max_output=args.triage_max_output),
+    )
+    cone = Path(args.cone) if args.cone else settings.data_dir / "index" / "eddie_cone.sqlite"
+    if not cone.exists():
+        raise ConfigError(f"no cone at {cone}: run `python -m eddie.cli cone build` first")
+    plan = build_plan(settings.index_path, cone, params)
+    out = Path(args.out) if args.out else settings.data_dir / "index" / "work_plan.json"
+    write_json_atomic(out, plan)
+    if not args.no_db:
+        ArtifactStore(settings.data_dir / "state" / "eddie_artifacts.sqlite").replace_pending_plan(plan["plan_hash"], plan["work_items"])
+    t, b = plan["totals"], plan["budget"]
+    _out(f"plan {plan['plan_hash']}  fit={plan['fit']}  -> {out}")
+    _out(f"  Tier 1  $0      {plan['tier1']['modules']:,} modules, {plan['tier1']['decls']:,} decls mapped; {plan['tier1']['dead']:,} dead pruned")
+    _out(f"  Tier 2  R1.triage   {t['tier2']['decls']:,} live decls in {t['tier2']['batches']:,} batches      worst ${t['tier2']['worst_usd']:.4f}  expected ${t['tier2']['expected_usd']:.4f}  (budget ${b['tier2_usd']:.2f})")
+    _out(f"  Tier 3  R1->R2->R3  {t['tier3']['milestones']:,} milestones ({t['tier3']['mandatory']} mandatory chain), {t['tier3']['calls']:,} calls  worst ${t['tier3']['worst_usd']:.4f}  expected ${t['tier3']['expected_usd']:.4f}  (budget ${b['tier3_usd']:.2f}, retry reserve ${t['tier3']['retry_reserve_usd']:.2f})")
+    _out(f"  Tier 4  R4.consolidator  {t['tier4']['calls']} calls      worst ${t['tier4']['worst_usd']:.4f}  expected ${t['tier4']['expected_usd']:.4f}")
+    _out(f"  planned ${plan['planned_usd']:.4f} (worst ${plan['planned_worst_usd']:.4f}, expected ${plan['planned_expected_usd']:.4f}) of target ${b['target_usd']:.2f}")
+    c = plan["coverage"]
+    _out(f"  coverage  pillars {c['pillars_with_milestones']}/{c['pillars_total']}, roots included: {c['roots_included']}, dominator chain closed: {c['dominator_chain_closed']}")
+    _out(f"  lifetime  cap ${b['lifetime_cap_usd']:.2f}, W-tail ${b['w_tail_usd']:.3f} at concurrency {params.concurrency} -> usable ${b['usable_lifetime_usd']:.3f}; demo reserve ${b['reserve_demo_usd']:.2f}")
+    _out("  schedule  " + ", ".join(f"{d['date']} ${d['reserve_usd']:.2f}" for d in plan["schedule"]))
+    for w in plan["warnings"]:
+        _out(f"  WARNING   {w}")
+    return 0
+
+
 # --- sandbox --------------------------------------------------------------------------------
 
 
@@ -547,6 +599,24 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--cone")
     p.add_argument("--json", action="store_true")
     p.set_defaults(func=cmd_cone_stats)
+
+    p = sub.add_parser("plan-budget", help="exact tiered Ember work plan fitted inside a target budget")
+    p.add_argument("--target-usd", type=float, default=6.50)
+    p.add_argument("--tier2-usd", type=float, default=2.00)
+    p.add_argument("--reserve-demo-usd", type=float, default=1.50)
+    p.add_argument("--fit", choices=["worst", "expected"], default="worst")
+    p.add_argument("--concurrency", type=int, default=1)
+    p.add_argument("--start-date", help="first day of the schedule (YYYY-MM-DD, default tomorrow)")
+    p.add_argument("--triage-max-output", type=int, default=2048)
+    p.add_argument("--worker-max-output", type=int, default=4096)
+    p.add_argument("--critic-max-output", type=int, default=1024)
+    p.add_argument("--arbiter-max-output", type=int, default=8192)
+    p.add_argument("--arbiter-effort", default="xhigh", choices=["high", "xhigh", "max"])
+    p.add_argument("--consolidator-max-output", type=int, default=16384)
+    p.add_argument("--cone")
+    p.add_argument("--out")
+    p.add_argument("--no-db", action="store_true", help="do not load the queue into eddie_artifacts.sqlite")
+    p.set_defaults(func=cmd_plan_budget)
 
     sandbox = sub.add_parser("sandbox", help="guarded script runner").add_subparsers(dest="action", required=True)
     p = sandbox.add_parser("run", help="run a generated script; collect plots/audio + spectrograms + QC")
