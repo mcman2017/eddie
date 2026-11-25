@@ -3,7 +3,8 @@
 Each nontrivial zero 1/2 + i*gamma becomes a sine tone at gamma * hz_per_unit Hz, entering one
 after another and weighted by 1/|rho|, the weight each zero carries in Riemann's explicit
 formula for the primes. The spectrogram is drawn edge to edge (no axes or margins), so a
-player can map time to x exactly; its frequency range is recorded in zeta_zeros.json.
+player can map time to x exactly; its frequency range is recorded in zeta_zeros.json. It is
+dark ink on white paper: silence is white and every zero enters as a new dark line.
 """
 
 import json
@@ -41,7 +42,7 @@ with wave.open("zeta_zeros.wav", "wb") as out:
     out.writeframes((signal * 32767).astype("<i2").tobytes())
 
 # short-time Fourier transform, centered frames so column i sits at time i * hop / rate
-frame, hop = 2048, 256
+frame, hop = 4096, 256  # 5.4 Hz per row: neighbouring zeros stay separate lines
 padded = np.pad(signal, frame // 2)
 frames = np.lib.stride_tricks.sliding_window_view(padded, frame)[::hop]
 spectrum = np.abs(np.fft.rfft(frames * np.hanning(frame), axis=1)).T
@@ -49,13 +50,14 @@ freqs = np.fft.rfftfreq(frame, 1 / rate)
 keep = freqs <= P["f_max_hz"]
 db = 20 * np.log10(spectrum[keep] + 1e-9)
 
+# silence is the white of the page; the louder, the darker: amber, coral, magenta, indigo
 ramp = LinearSegmentedColormap.from_list(
-    "eddie_blue", ["#0b1220", "#0d366b", "#1c5cab", "#3987e5", "#86b6ef", "#cde2fb"]
+    "eddie_spectrogram", ["#FFFFFF", "#FDE9B8", "#F9B45C", "#EE6A4D", "#C2267A", "#5B21A6", "#1E1B6E"]
 )
 fig = plt.figure(figsize=(16, 4), dpi=100)
 ax = fig.add_axes((0, 0, 1, 1))
 ax.set_axis_off()
-ax.imshow(db, origin="lower", aspect="auto", cmap=ramp, vmin=db.max() - 70, vmax=db.max(),
+ax.imshow(db, origin="lower", aspect="auto", cmap=ramp, vmin=db.max() - 55, vmax=db.max(),
           extent=(0, len(signal) / rate, 0, P["f_max_hz"]), interpolation="bilinear")
 fig.savefig("zeta_zeros_spectrogram.png", dpi=100)
 plt.close(fig)
