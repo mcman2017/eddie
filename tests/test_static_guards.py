@@ -62,7 +62,8 @@ def test_infrastructure_never_carries_keys_or_env_files():
 
 def test_gitignore_blocks_licensed_and_local_material():
     ignore = (ROOT / ".gitignore").read_text().split()
-    for needed in ("*.lean", "*.tar*", "/data/*", "*.sqlite", ".env", "initial-prompt.md", "CLAUDE.local.md"):
+    for needed in ("*.lean", "*.tar*", "/data/*", "*.sqlite", ".env", "initial-prompt.md", "prompt-*.md",
+                   ".hygiene-blocklist", "CLAUDE.local.md"):
         assert needed in ignore, needed
 
 
@@ -76,7 +77,8 @@ def _hygiene_module():
 @pytest.mark.parametrize(
     "path",
     ["src/Main.lean", "data/raw/parts/lean.tar.gz.part01", "ledger.sqlite", "x.sqlite-wal", ".env",
-     "initial-prompt.md", "CLAUDE.local.md", "exports/eddie_ember_telemetry.json", "data/index/x"],
+     "initial-prompt.md", "prompt-1.md", "prompt-2.md", ".hygiene-blocklist", "CLAUDE.local.md",
+     "exports/eddie_ember_telemetry.json", "data/index/x"],
 )
 def test_hygiene_check_flags_forbidden_paths(path):
     assert _hygiene_module().path_violations(path)
@@ -103,3 +105,21 @@ def test_tracked_tree_passes_the_hygiene_check():
         pytest.skip("not a git checkout")
     res = subprocess.run(["python3", str(ROOT / "scripts/check_repo_hygiene.py")], capture_output=True, text=True)
     assert res.returncode == 0, res.stderr
+
+
+def test_hygiene_blocks_internal_hosts_by_hash_including_subdomains(monkeypatch):
+    mod = _hygiene_module()
+    assert mod.BLOCKED_HOST_SHA256, "the internal-host blocklist must not be empty"
+    synthetic = "corp" + ".internal-example.test"
+    monkeypatch.setattr(mod, "BLOCKED_HOST_SHA256", {mod._host_hash(synthetic)})
+    assert mod.content_violations("k8s/x.yaml", f"image: registry.{synthetic}/app:1".encode())
+    assert mod.content_violations("README.md", f"see https://{synthetic}/docs".encode())
+    assert mod.content_violations("k8s/x.yaml", b"image: ghcr.io/mcman2017/eddie:latest") == []
+    assert mod.content_violations("x.md", b"eddie.example.local and 127.0.0.1:8765") == []
+
+
+def test_k8s_uses_only_public_placeholders():
+    kustom = (ROOT / "k8s/kustomization.yaml").read_text()
+    assert "ghcr.io/mcman2017/eddie" in kustom
+    assert "eddie.example.local" in (ROOT / "k8s/ingress.yaml").read_text()
+    assert "imagePullSecrets" not in (ROOT / "k8s/deployment.yaml").read_text()

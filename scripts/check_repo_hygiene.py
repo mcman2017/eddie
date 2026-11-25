@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 import fnmatch
+import hashlib
 import re
 import subprocess
 import sys
@@ -37,6 +38,8 @@ FORBIDDEN_GLOBS = (
     ".env",
     ".env.*",
     "initial-prompt.md",
+    "prompt-*.md",
+    ".hygiene-blocklist",
     "CLAUDE.local.md",
     "eddie_ember_telemetry.json",
 )
@@ -59,6 +62,40 @@ SECRET_PATTERNS = {
     ),
 }
 CONTENT_SCAN_SKIP = {"scripts/check_repo_hygiene.py", "LICENSE"}
+
+# Internal hostnames must never appear in this public repo. They are matched by the
+# sha256 of a hostname or any parent suffix, so this file never names them. Add more
+# hosts (one per line, plain text) to the git-ignored `.hygiene-blocklist` at the repo root.
+BLOCKED_HOST_SHA256 = {
+    "22e99a3e8072bd48eea1d3492490701d05c0d5c30e7acc12875d8c5b910f87b6",
+}
+_HOSTNAME = re.compile(r"(?<![\w.-])(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,24}(?![\w-])", re.IGNORECASE)
+
+
+def _host_hash(host: str) -> str:
+    return hashlib.sha256(host.lower().encode()).hexdigest()
+
+
+def blocked_host_hashes() -> set[str]:
+    hashes = set(BLOCKED_HOST_SHA256)
+    local = REPO / ".hygiene-blocklist"
+    if local.exists():
+        for line in local.read_text().splitlines():
+            line = line.strip()
+            if line and not line.startswith("#"):
+                hashes.add(_host_hash(line))
+    return hashes
+
+
+def blocked_hosts_in(text: str, hashes: set[str]) -> list[str]:
+    found = []
+    for match in _HOSTNAME.finditer(text):
+        labels = match.group().lower().split(".")
+        for i in range(len(labels) - 1):
+            if _host_hash(".".join(labels[i:])) in hashes:
+                found.append(match.group())
+                break
+    return found
 
 
 def _git(*args: str) -> str:
@@ -89,11 +126,14 @@ def content_violations(path: str, blob: bytes) -> list[str]:
     if path in CONTENT_SCAN_SKIP or b"\0" in blob[:8192]:
         return []
     text = blob.decode("utf-8", errors="replace")
-    return [
+    problems = [
         f"{path}: looks like it contains a secret ({label})"
         for label, pattern in SECRET_PATTERNS.items()
         if pattern.search(text)
     ]
+    if blocked_hosts_in(text, blocked_host_hashes()):
+        problems.append(f"{path}: contains an internal hostname that must not be published")
+    return problems
 
 
 def check(paths: list[str], read) -> list[str]:

@@ -21,6 +21,16 @@ On 2026-11-20 a formal Lean 4 proof of the Riemann Hypothesis was released: 175,
 | Dead code | 24% of source declarations lie *outside* the proof cone, so Ember never needs to see them |
 | The budget wall | One R1 triage pass over every signature would cost **~$15**. The $0 index has to decide what Ember ever sees. |
 
+### Night 1.5: the map and the plan, still $0
+
+| | |
+|---|---|
+| Proof cone | 7.27M declaration references resolved Lean-style (namespaces, `open`, dot notation). Liveness comes from the kernel-checked export: **799,028 live** declarations (75.0%). Our own resolver agrees with it at precision 0.961, recall 0.925. |
+| Structure | Personalized PageRank from `Main`, dominator tree and dominated mass, cross-pillar bridges, and one explainable importance score per declaration |
+| Pillars | **20 proof pillars** found by splitting the live directory tree top-down; 17 are matched to the 20-step timeline in the companion remark |
+| Budget plan | `plan-budget` costs every call with the governor's own estimator and prices. The worst case is **$5.81 of a $6.50 target**: R1 triage for 31,951 live declarations ($2.00), and the full R1 → R4 pipeline for 307 milestones covering all 20 pillars, every one connected to `Main` through its dominators ($3.82). The expected cost is $2.68, scheduled over 4 days under the $2 daily cap. |
+| Explorer | A camera-first map of the whole proof, from `Main` down to single declarations, plus an inspector with visual and audio witnesses |
+
 ## The Metabolic Spend Governor
 
 Contest rule: spend above **$10** on Ember disqualifies the entry, and the dashboard's alerts do not stop traffic. Ember also defaults to `effort="max"`, and above 200K input tokens the **whole** request costs 3×. So every call passes through a governor that sits physically in the request path (`eddie/llm/`):
@@ -44,7 +54,7 @@ The rest of the governor:
 
 ```bash
 uv sync
-uv run pytest                                                   # ~300 tests, offline, $0
+uv run pytest                                                   # 355 tests, offline, $0
 uv run python scripts/fetch_riemann_archive.py --sample         # synthetic mini tree, instant
 uv run python -m eddie.cli index build --src data/sample/tree
 uv run python -m eddie.cli index search zeta
@@ -61,7 +71,16 @@ uv run python -m eddie.cli index stats
 uv run python -m eddie.cli index validate-spine data/raw/p0/spine.tsv.gz
 ```
 
-UI: `make api` (FastAPI on :8765) plus `make web` (Vite on :5173), or `make compose-up` for the keyless, read-only container.
+Map, plan and explorer (all $0; the cone needs the real index above and takes about a minute):
+
+```bash
+make cone   # declaration graph, live proof cone, pillars, zoom tree -> data/index/eddie_cone.sqlite
+make plan   # exact tiered Ember plan inside $6.50 -> data/index/work_plan.json (no model calls)
+make seed   # sandbox-rendered demo witnesses, labeled seed (never Ember output)
+make dev    # API on 127.0.0.1:8765 + Vite on 127.0.0.1:5173
+```
+
+Both servers bind to loopback only. To view them from another machine, forward the ports over SSH (`ssh -N -L 5173:127.0.0.1:5173 -L 8765:127.0.0.1:8765 <host>`) and open `http://localhost:5173`. Deep links work: `#decl=<id>` opens a declaration and `#node=<id>` frames a part of the map. `make compose-up` runs the keyless, read-only API container instead.
 
 Backends (`EDDIE_BACKEND`):
 - `mock` (default): deterministic, $0.
@@ -82,10 +101,13 @@ Every `.wav` gets a spectrogram PNG. Every image and audio file gets $0 QC (blan
 | Path | What |
 |---|---|
 | `eddie/llm/` | Governor, ledger, pricing, estimator, usage parser, transport, gateway, adapters (mock/dgx/ember), telemetry |
-| `eddie/ingest/` | Fetcher, lexer, parser, import graph, index build and queries, synthetic fixtures |
+| `eddie/ingest/` | Fetcher, lexer, parser, import graph, index build and queries, declaration references, proof cone, zoom tree, synthetic fixtures |
+| `eddie/planner/` | Proof pillars and the exact tiered budget planner |
+| `eddie/state/` | The mutable artifacts database (work queue, triage, intuitions, witnesses, reviews) |
 | `eddie/sandbox/` | Runner, child bootstrap, spectrogram/QC post-pass, artifact store |
-| `eddie/api/` | Read-only FastAPI app |
-| `web/` | React/Vite/Canvas UI |
+| `eddie/demo/` | `seed-demo` and its witness scripts |
+| `eddie/api/` | Read-only FastAPI app and explorer API |
+| `web/` | React/Vite/Canvas explorer: proof map, inspector, witness and audio players |
 | `k8s/` | Keyless PSA-`restricted` manifests (not applied) |
 | `tests/` | The offline suite |
 

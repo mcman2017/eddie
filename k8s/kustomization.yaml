@@ -11,5 +11,5 @@ resources:
   - ingress.yaml
   - networkpolicy.yaml
 images:
-  - name: registry.theclamlife.com/eddie/eddie
-    newTag: "0.1.0"
+  - name: ghcr.io/mcman2017/eddie
+    newTag: latest

@@ -20,6 +20,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from eddie import __version__, paths
+from eddie.api.explorer import create_router
 from eddie.ingest.index_db import connect_ro, lookup, search, stats
 
 
@@ -40,6 +41,7 @@ def _read_json(path: Path) -> dict[str, Any] | None:
 def create_app() -> FastAPI:
     public_dir, index_path, web_dist = _paths()
     app = FastAPI(title="Eddie", version=__version__, docs_url="/api/docs", openapi_url="/api/openapi.json", redoc_url=None)
+    app.include_router(create_router())
     stats_cache: dict[str, Any] = {}
     stats_lock = threading.Lock()
 

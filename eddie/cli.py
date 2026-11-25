@@ -385,6 +385,133 @@ def cmd_index_validate(args: argparse.Namespace) -> int:
     return 0
 
 
+# --- cone (declaration-level proof cone, pillars) ---------------------------------------------
+
+
+def _cone_path(args: argparse.Namespace) -> Path:
+    return Path(args.cone) if getattr(args, "cone", None) else load_settings().data_dir / "index" / "eddie_cone.sqlite"
+
+
+def cmd_cone_build(args: argparse.Namespace) -> int:
+    from eddie.ingest.cone import build_cone
+
+    settings = load_settings()
+    raw = settings.data_dir / "raw"
+    spine = Path(args.spine) if args.spine else raw / "p0" / "spine.tsv.gz"
+    pdf = Path(args.pdf) if args.pdf else raw / "pdfs" / "remark.pdf"
+    build_cone(
+        Path(args.index) if args.index else settings.index_path,
+        _cone_path(args),
+        spine_path=spine if spine.exists() else None,
+        pdf_path=pdf if pdf.exists() else None,
+        workers=args.workers,
+    )
+    return cmd_cone_stats(args)
+
+
+def cmd_cone_stats(args: argparse.Namespace) -> int:
+    from eddie.ingest.cone import cone_stats
+
+    path = _cone_path(args)
+    if not path.exists():
+        raise ConfigError(f"no cone at {path}: run `python -m eddie.cli cone build`")
+    st = cone_stats(path)
+    m = st["meta"]
+    if getattr(args, "json", False):
+        _out(json.dumps(st, indent=2))
+        return 0
+    decls, live, dead = int(m["decls"]), int(m["live"]), int(m["dead"])
+    _out(f"cone          {path}  (built {m['built_at']}, {m['timing_total_s']} s)")
+    _out(f"liveness      {live:,} live / {decls:,} decls ({100 * live / max(decls, 1):.1f}%), {dead:,} dead pruned  [oracle: {m['liveness_source']}]")
+    if m["agreement"]:
+        a = m["agreement"]
+        _out(f"graph check   our reference graph reaches {a['graph_live']:,}: precision {a['precision']:.3f}, recall {a['recall']:.3f} vs the spine")
+    _out(f"edges         {int(m['edges']):,} reference edges ({int(m['weak_edges']):,} weak), {int(m['live_edges']):,} inside the live cone; max depth {m['max_depth']}")
+    _out(f"roots         {', '.join(m['roots'])}")
+    _out(f"pillars       {m['pillars']}  (PDF timeline: {m['timeline_matched']}/{m['timeline_steps']} steps matched)")
+    for p in st["pillars"]:
+        sub = f"  ~ {p['subtitle']}" if p["subtitle"] else ""
+        _out(f"  {p['ord']:>2}. {p['title'][:52]:<52} live {p['live']:>8,}  dead {p['dead']:>7,}  depth~{(p['median_depth'] or 0):.0f}{sub[:90]}")
+    return 0
+
+
+# --- plan-budget ------------------------------------------------------------------------------
+
+
+def cmd_plan_budget(args: argparse.Namespace) -> int:
+    from dataclasses import replace
+
+    from eddie.llm.telemetry import write_json_atomic
+    from eddie.planner.budget import PlanParams, build_plan
+    from eddie.state.artifacts import ArtifactStore
+
+    settings = load_settings()
+    base = PlanParams()
+    params = replace(
+        base,
+        target_usd=args.target_usd,
+        tier2_usd=args.tier2_usd,
+        reserve_demo_usd=args.reserve_demo_usd,
+        lifetime_cap_usd=float(nano_to_usd(settings.lifetime_cap_nano)),
+        daily_cap_usd=float(nano_to_usd(settings.daily_cap_nano)),
+        concurrency=args.concurrency,
+        fit=args.fit,
+        start_date=args.start_date or "",
+        worker=replace(base.worker, max_output=args.worker_max_output),
+        critic=replace(base.critic, max_output=args.critic_max_output),
+        arbiter=replace(base.arbiter, max_output=args.arbiter_max_output, effort=args.arbiter_effort),
+        consolidator=replace(base.consolidator, max_output=args.consolidator_max_output),
+        triage=replace(base.triage, max_output=args.triage_max_output),
+    )
+    cone = Path(args.cone) if args.cone else settings.data_dir / "index" / "eddie_cone.sqlite"
+    if not cone.exists():
+        raise ConfigError(f"no cone at {cone}: run `python -m eddie.cli cone build` first")
+    plan = build_plan(settings.index_path, cone, params)
+    out = Path(args.out) if args.out else settings.data_dir / "index" / "work_plan.json"
+    write_json_atomic(out, plan)
+    if not args.no_db:
+        ArtifactStore(settings.data_dir / "state" / "eddie_artifacts.sqlite").replace_pending_plan(plan["plan_hash"], plan["work_items"])
+    t, b = plan["totals"], plan["budget"]
+    _out(f"plan {plan['plan_hash']}  fit={plan['fit']}  -> {out}")
+    _out(f"  Tier 1  $0      {plan['tier1']['modules']:,} modules, {plan['tier1']['decls']:,} decls mapped; {plan['tier1']['dead']:,} dead pruned")
+    _out(f"  Tier 2  R1.triage   {t['tier2']['decls']:,} live decls in {t['tier2']['batches']:,} batches      worst ${t['tier2']['worst_usd']:.4f}  expected ${t['tier2']['expected_usd']:.4f}  (budget ${b['tier2_usd']:.2f})")
+    _out(f"  Tier 3  R1->R2->R3  {t['tier3']['milestones']:,} milestones ({t['tier3']['mandatory']} mandatory chain), {t['tier3']['calls']:,} calls  worst ${t['tier3']['worst_usd']:.4f}  expected ${t['tier3']['expected_usd']:.4f}  (budget ${b['tier3_usd']:.2f}, retry reserve ${t['tier3']['retry_reserve_usd']:.2f})")
+    _out(f"  Tier 4  R4.consolidator  {t['tier4']['calls']} calls      worst ${t['tier4']['worst_usd']:.4f}  expected ${t['tier4']['expected_usd']:.4f}")
+    _out(f"  planned ${plan['planned_usd']:.4f} (worst ${plan['planned_worst_usd']:.4f}, expected ${plan['planned_expected_usd']:.4f}) of target ${b['target_usd']:.2f}")
+    c = plan["coverage"]
+    _out(f"  coverage  pillars {c['pillars_with_milestones']}/{c['pillars_total']}, roots included: {c['roots_included']}, dominator chain closed: {c['dominator_chain_closed']}")
+    _out(f"  lifetime  cap ${b['lifetime_cap_usd']:.2f}, W-tail ${b['w_tail_usd']:.3f} at concurrency {params.concurrency} -> usable ${b['usable_lifetime_usd']:.3f}; demo reserve ${b['reserve_demo_usd']:.2f}")
+    _out("  schedule  " + ", ".join(f"{d['date']} ${d['reserve_usd']:.2f}" for d in plan["schedule"]))
+    for w in plan["warnings"]:
+        _out(f"  WARNING   {w}")
+    return 0
+
+
+# --- seed-demo --------------------------------------------------------------------------------
+
+
+def cmd_seed_demo(args: argparse.Namespace) -> int:
+    from eddie.demo.seed import SeedParams, seed_demo
+
+    settings = load_settings()
+    cone = Path(args.cone) if args.cone else settings.data_dir / "index" / "eddie_cone.sqlite"
+    if not cone.exists():
+        raise ConfigError(f"no cone at {cone}: run `python -m eddie.cli cone build` first")
+    report = seed_demo(
+        cone_path=cone,
+        index_path=settings.index_path,
+        db_path=settings.data_dir / "state" / "eddie_artifacts.sqlite",
+        artifact_dir=settings.data_dir / "artifacts",
+        params=SeedParams.quick() if args.quick else SeedParams(),
+        activity=not args.no_activity,
+        log=_out,
+    )
+    for w in report["witnesses"]:
+        _out(f"witness  {w['decl']:<40} {w['kind']:<11} {w['status']:<9} {w['sha256'][:12]}.{w['ext']}")
+    _out("seeded   all rows are source='seed' and labeled as not Ember output; re-running replaces them ($0)")
+    return 0
+
+
 # --- sandbox --------------------------------------------------------------------------------
 
 
@@ -484,6 +611,43 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("spine")
     p.add_argument("--index")
     p.set_defaults(func=cmd_index_validate)
+
+    cone = sub.add_parser("cone", help="declaration-level live proof cone + pillars").add_subparsers(dest="action", required=True)
+    p = cone.add_parser("build", help="reference graph, liveness, dominators, scores, pillars, zoom tree")
+    p.add_argument("--index")
+    p.add_argument("--cone")
+    p.add_argument("--spine", help="liveness oracle (default data/raw/p0/spine.tsv.gz when present)")
+    p.add_argument("--pdf", help="companion PDF for pillar titles (default data/raw/pdfs/remark.pdf)")
+    p.add_argument("--workers", type=int)
+    p.set_defaults(func=cmd_cone_build)
+    p = cone.add_parser("stats", help="liveness, graph agreement and the pillar list")
+    p.add_argument("--cone")
+    p.add_argument("--json", action="store_true")
+    p.set_defaults(func=cmd_cone_stats)
+
+    p = sub.add_parser("plan-budget", help="exact tiered Ember work plan fitted inside a target budget")
+    p.add_argument("--target-usd", type=float, default=6.50)
+    p.add_argument("--tier2-usd", type=float, default=2.00)
+    p.add_argument("--reserve-demo-usd", type=float, default=1.50)
+    p.add_argument("--fit", choices=["worst", "expected"], default="worst")
+    p.add_argument("--concurrency", type=int, default=1)
+    p.add_argument("--start-date", help="first day of the schedule (YYYY-MM-DD, default tomorrow)")
+    p.add_argument("--triage-max-output", type=int, default=2048)
+    p.add_argument("--worker-max-output", type=int, default=4096)
+    p.add_argument("--critic-max-output", type=int, default=1024)
+    p.add_argument("--arbiter-max-output", type=int, default=8192)
+    p.add_argument("--arbiter-effort", default="xhigh", choices=["high", "xhigh", "max"])
+    p.add_argument("--consolidator-max-output", type=int, default=16384)
+    p.add_argument("--cone")
+    p.add_argument("--out")
+    p.add_argument("--no-db", action="store_true", help="do not load the queue into eddie_artifacts.sqlite")
+    p.set_defaults(func=cmd_plan_budget)
+
+    p = sub.add_parser("seed-demo", help="$0 sandbox witnesses for the explorer (labeled seed, never Ember)")
+    p.add_argument("--cone")
+    p.add_argument("--quick", action="store_true", help="small grids (seconds); for smoke tests")
+    p.add_argument("--no-activity", action="store_true", help="do not mark a brain region as active")
+    p.set_defaults(func=cmd_seed_demo)
 
     sandbox = sub.add_parser("sandbox", help="guarded script runner").add_subparsers(dest="action", required=True)
     p = sandbox.add_parser("run", help="run a generated script; collect plots/audio + spectrograms + QC")
