@@ -76,6 +76,7 @@ CREATE TABLE pillars (
     keywords TEXT NOT NULL
 );
 CREATE TABLE timeline (number INTEGER PRIMARY KEY, phrase TEXT NOT NULL, pillar_id INTEGER);
+CREATE TABLE pillar_edges (source INTEGER NOT NULL, target INTEGER NOT NULL, weight INTEGER NOT NULL);
 CREATE TABLE tree_nodes (
     id INTEGER PRIMARY KEY,
     parent_id INTEGER,
@@ -334,6 +335,14 @@ def build_cone(
         owner = next((p for p, s in enumerate(specs) if any(t.number == it.number for t in s.timeline)), None)
         con.execute("INSERT INTO timeline VALUES (?, ?, ?)", (it.number, it.phrase, owner))
     con.executemany("INSERT INTO module_pillar VALUES (?, ?)", zip(module_ids, module_pillar_list, strict=True))
+    ps, pt = decl_pillar[ls], decl_pillar[ld]
+    sel = (ps != pt) & (ps >= 0) & (pt >= 0)
+    if sel.any():
+        pairs_pt, weights = np.unique(np.stack([ps[sel], pt[sel]], axis=1), axis=0, return_counts=True)
+        con.executemany(
+            "INSERT INTO pillar_edges VALUES (?, ?, ?)",
+            [(int(a), int(b), int(w)) for (a, b), w in zip(pairs_pt.tolist(), weights.tolist(), strict=True)],
+        )
     is_root = np.zeros(n_ids, dtype=bool)
     is_root[roots] = True
     rows = []
@@ -356,6 +365,10 @@ def build_cone(
         "decls": int(exists.sum()),
         "live": int(live.sum()),
         "dead": int((exists & ~live).sum()),
+        # examples and anonymous instances have no name to match against the spine; the
+        # camera-facing "dead code" share is measured over named declarations
+        "named": int(sum(1 for d in range(1, n_ids) if names[d])),
+        "dead_named": int(sum(1 for d in range(1, n_ids) if names[d] and not live[d])),
         "edges": int(len(src)),
         "weak_edges": int(weak.sum()),
         "live_edges": int(keep.sum()),
