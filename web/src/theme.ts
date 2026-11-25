@@ -63,7 +63,7 @@ export const TIER_LABEL = {
   foundations: "Foundations",
   machinery: "Machinery",
   bottleneck: "Bottleneck",
-  main: "Summit (Main.lean)",
+  main: "Summit",
 } as const;
 
 export const ACT_NUMERAL = {
@@ -73,20 +73,19 @@ export const ACT_NUMERAL = {
   main: "Act IV",
 } as const;
 
-/** "Act II: Machinery" */
-export function actName(tier: keyof typeof TIER_LABEL): string {
-  return `${ACT_NUMERAL[tier]}: ${TIER_LABEL[tier]}`;
+/** "Act II: Machinery"; the long form names the file the last act lives in. */
+export function actName(tier: keyof typeof TIER_LABEL, long = false): string {
+  return `${ACT_NUMERAL[tier]}: ${TIER_LABEL[tier]}${long && tier === "main" ? " (Main.lean)" : ""}`;
 }
 
 // Height ramps of the two surfaces, as (height, colour) stops. Height 0 is "sea level": |zeta| = 1
-// on the strip, the long-run level on the wave. Both run dark at the extremes and light at sea
-// level, so wells and peaks stand off the paper and the contour lines stay readable everywhere.
+// on the strip, the long-run level on the wave. Both are lightest near sea level and deepen
+// toward the wells and the peaks, so both ends stand off the paper and the contour lines stay
+// readable everywhere. The stops sit where the surfaces actually spend their area, and each
+// ramp is flat below its first stop, so a well is not coloured by how near a grid row it fell.
+// The zeta ramp stops at magenta: violet reads as the cobalt of the wells to red-blind viewers.
 export const RAMP_ZETA = palette.rampZeta as RampStop[];
 export const RAMP_WAVE = palette.rampWave as RampStop[];
-
-// Interim stops for the 3D terrain until it samples the ramps above as a texture.
-export const RAMP = ["#101E6E", "#1C77C3", "#6CC5A0", "#F1E7A6", "#F28C38", "#C72C73"] as const;
-export const DEAD_RAMP = ["#C9C5BC", "#D9D5CC", "#E6E2DA", "#F0EDE6"] as const;
 
 /** "#rrggbb" as display-referred [r, g, b] in 0..1 (what a shader should output unchanged). */
 export function srgb(hex: string): [number, number, number] {

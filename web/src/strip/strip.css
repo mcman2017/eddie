@@ -406,3 +406,86 @@
   max-width: 560px;
   margin: 0;
 }
+
+/* --- legend ------------------------------------------------------------------------------- */
+
+.strip-legend {
+  position: absolute;
+  z-index: 1;
+  left: 18px;
+  bottom: 16px;
+  width: 204px;
+  display: grid;
+  gap: 7px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid var(--hair-strong);
+  background: rgba(255, 255, 255, 0.94);
+  font-size: 12.5px;
+  color: var(--ink-2);
+  pointer-events: none;
+}
+
+.legend-ramp {
+  height: 10px;
+  border-radius: 3px;
+  border: 1px solid rgba(24, 24, 27, 0.35);
+}
+
+.legend-ends {
+  display: flex;
+  justify-content: space-between;
+  margin-top: -3px;
+  font-size: 11.5px;
+  color: var(--ink-3);
+}
+
+.legend-ends span:nth-child(2) {
+  color: var(--ink);
+  font-weight: 600;
+}
+
+.legend-acts,
+.legend-keys {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.legend-acts li,
+.legend-keys li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--ink);
+}
+
+.legend-keys {
+  padding-top: 6px;
+  border-top: 1px solid var(--hair);
+}
+
+.legend-keys li {
+  color: var(--ink-2);
+}
+
+/* the critical line as it is drawn: a gold core in a crimson casing */
+.key-line {
+  flex: none;
+  width: 18px;
+  height: 3px;
+  background: var(--gold);
+  box-shadow: 0 0 0 2px var(--crimson);
+  margin: 0 1px;
+}
+
+.key-dead {
+  flex: none;
+  width: 18px;
+  height: 9px;
+  border-radius: 2px;
+  background: var(--chalk);
+  border: 1px dashed var(--dead);
+}

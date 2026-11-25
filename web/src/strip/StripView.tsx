@@ -1,10 +1,11 @@
 import { useEffect, useRef, useState } from "react";
 import { ApiError } from "../api";
 import { routeNumber, routeText, writeRoute } from "../route";
-import { TIER_LABEL } from "../theme";
+import { RAMP_WAVE, RAMP_ZETA, actName } from "../theme";
 import { topPeaks } from "./field";
 import { HarmonicSynth, pitchOf, type Partial as Tone } from "./HarmonicSynth";
 import { loadLandscape, type Landscape } from "./landscape";
+import { rampGradient } from "./ramp";
 import { SpectrumPanel } from "./SpectrumPanel";
 import { StripEngine, type Population, type Preset, type Probe } from "./StripEngine";
 import "./strip.css";
@@ -22,6 +23,11 @@ const PRESETS: [Preset, string][] = [
   ["dive", "Critical line dive"],
   ["finale", "Act 3 → Main"],
 ];
+
+const TIERS = ["foundations", "machinery", "bottleneck", "main"] as const;
+// each ramp from its first stop to its last: below the first stop the colour does not change
+const ZETA_KEY = rampGradient(RAMP_ZETA, RAMP_ZETA[0][0], 1);
+const WAVE_KEY = rampGradient(RAMP_WAVE, RAMP_WAVE[0][0], 1);
 
 const short = (title: string) => title.split(" · ").pop() ?? title;
 
@@ -213,14 +219,14 @@ export default function StripView({ active, chapter, onChapter }: Props) {
             {chapters.map((c, i) => (
               <button key={c.slug} type="button" className={`beacon-label tier-${c.tier}`} data-beacon={i} data-testid="beacon"
                 data-chapter={c.chapter} onClick={() => onChapter(c.slug)}
-                aria-label={`Chapter ${c.chapter}: ${short(c.title)} (${TIER_LABEL[c.tier]})`}>
+                aria-label={`Chapter ${c.chapter}: ${short(c.title)} (${actName(c.tier)})`}>
                 <b>{c.chapter}</b>
                 <span className="beacon-title">{short(c.title)}</span>
               </button>
             ))}
             {zeros.map((z, i) => (
               <span key={z.t} className="zero-label" data-zero={i} aria-hidden="true">
-                {z.t.toFixed(2)}
+                Zero #{i + 1}: t = {z.t.toFixed(2)}
               </span>
             ))}
           </div>
@@ -240,6 +246,35 @@ export default function StripView({ active, chapter, onChapter }: Props) {
             )}
             {land.meta.stale && " The landscape is older than the proof cone: run make landscape."}
           </p>
+
+          <div className="strip-legend" data-testid="strip-legend">
+            <div className="legend-ramp" style={{ background: wave ? WAVE_KEY : ZETA_KEY }} />
+            <div className="legend-ends">
+              <span>{wave ? "quiet" : "ζ near 0"}</span>
+              <span>{wave ? "the wave's height" : "the size of ζ"}</span>
+              <span>{wave ? "loud" : "large"}</span>
+            </div>
+            <ul className="legend-acts">
+              {TIERS.map((tier) => (
+                <li key={tier} className={`tier-${tier}`}>
+                  <i className="act-chip" />
+                  {actName(tier)}
+                </li>
+              ))}
+            </ul>
+            <ul className="legend-keys">
+              {!wave && (
+                <li>
+                  <i className="key-line" />
+                  the critical line, σ = 1/2
+                </li>
+              )}
+              <li>
+                <i className="key-dead" />
+                dead code: never used by the proof
+              </li>
+            </ul>
+          </div>
 
           <div className="strip-cams" role="group" aria-label="Camera">
             {PRESETS.map(([name, label], i) => (
@@ -317,7 +352,7 @@ export default function StripView({ active, chapter, onChapter }: Props) {
                 Chapter {chapters[hover].chapter}: {short(chapters[hover].title)}
               </strong>
               <span>
-                {TIER_LABEL[chapters[hover].tier]}, {chapters[hover].live.toLocaleString()} live and {chapters[hover].dead.toLocaleString()} dead
+                {actName(chapters[hover].tier)}, {chapters[hover].live.toLocaleString()} live and {chapters[hover].dead.toLocaleString()} dead
                 declarations
               </span>
             </div>
