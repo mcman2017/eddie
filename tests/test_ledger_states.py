@@ -292,11 +292,21 @@ def test_live_guards_require_both_flags(monkeypatch):
         gov.assert_live_allowed()
 
 
+def test_billable_ledger_is_never_auto_created():
+    env = dict(os.environ, EDDIE_BACKEND="ember", EDDIE_ALLOW_LIVE_EMBER="true")
+    settings = load_settings(env)
+    with pytest.raises(LedgerIntegrityError, match="budget init"):
+        SpendGovernor(settings, billable=True)
+    assert not settings.ledger_path.exists()
+
+
 def test_unanchored_ledger_is_refused_for_live(monkeypatch):
     monkeypatch.setattr(governor_mod, "running_under_pytest", lambda: False)
     monkeypatch.setattr(governor_mod, "running_in_container", lambda: False)
     env = dict(os.environ, EDDIE_BACKEND="ember", EDDIE_ALLOW_LIVE_EMBER="true")
-    gov = SpendGovernor(load_settings(env), billable=True)  # auto-created, never anchored
+    settings = load_settings(env)
+    Ledger(settings.ledger_path, billable=True)  # exists, but was never anchored by `budget init`
+    gov = SpendGovernor(settings, billable=True)
     with pytest.raises(LedgerIntegrityError, match="anchor"):
         gov.assert_live_allowed()
 

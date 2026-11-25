@@ -10,6 +10,7 @@ All helpers read HOME / XDG_* / EDDIE_DATA_DIR at call time, so tests can redire
 from __future__ import annotations
 
 import os
+import pwd
 from pathlib import Path
 
 
@@ -45,6 +46,18 @@ def default_public_dir() -> Path:
 
 def default_kill_switch_path() -> Path:
     return state_dir() / "KILL"
+
+
+def canonical_home() -> Path:
+    """The passwd home, independent of $HOME, so a redirected HOME cannot hide an anchor.
+
+    Tests point EDDIE_CANONICAL_HOME at their temp home.
+    """
+    return Path(os.environ.get("EDDIE_CANONICAL_HOME") or pwd.getpwuid(os.getuid()).pw_dir)
+
+
+def canonical_anchor_path() -> Path:
+    return canonical_home() / ".config" / "eddie" / "ledger-anchor.json"
 
 
 def default_key_file() -> Path:

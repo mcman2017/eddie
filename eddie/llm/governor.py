@@ -87,6 +87,18 @@ def filesystem_type(path: Path) -> str:
     return best_type
 
 
+def check_live_flags(settings: Settings, *, real_network: bool = True) -> None:
+    """The cheap live-call checks. They touch no file, so a refusal leaves no trace."""
+    if settings.backend != "ember":
+        raise LiveEmberDisabledError("EDDIE_BACKEND is not 'ember'")
+    if not settings.allow_live_ember:
+        raise LiveEmberDisabledError("EDDIE_ALLOW_LIVE_EMBER is not 'true'")
+    if real_network and running_under_pytest():
+        raise LiveEmberDisabledError("live Ember calls are impossible under pytest")
+    if real_network and running_in_container():
+        raise LiveEmberDisabledError("live Ember calls run only from the host CLI, never in a container")
+
+
 # --- reservations ---------------------------------------------------------------------------
 
 
@@ -118,32 +130,29 @@ class SpendGovernor:
     def __init__(self, settings: Settings, *, billable: bool, ledger: Ledger | None = None) -> None:
         self.settings = settings
         self.billable = billable
-        path = settings.ledger_path if billable else settings.shadow_ledger_path
-        self.ledger = ledger or Ledger(path, billable=billable)
+        if ledger is None:
+            if billable:  # the canonical ledger is only ever created by `budget init`
+                ledger = Ledger(settings.ledger_path, billable=True, create=False)
+            else:
+                ledger = Ledger(settings.shadow_ledger_path, billable=False)
+        self.ledger = ledger
         self.run_id = uuid.uuid4().hex
-        self.caps = Caps(
-            lifetime_nano=settings.lifetime_cap_nano,
-            daily_nano=settings.daily_cap_nano,
-            run_nano=settings.run_cap_nano,
-            max_concurrency=settings.max_concurrency,
-        )
+        self.caps = caps_from_settings(settings)
         self.ledger.register_run(self.run_id, settings.run_cap_nano)
 
     # --- live guards ------------------------------------------------------------------------------
 
-    def assert_live_allowed(self) -> None:
-        """Every condition for a paid call. Raises before any network object exists."""
+    def assert_live_allowed(self, *, real_network: bool = True) -> None:
+        """Every condition for a paid call. Raises before any network object exists.
+
+        `real_network=False` is only for tests that inject an offline transport: the flag,
+        filesystem and anchor checks still apply, and `GovernedTransport` independently
+        refuses to build a real network transport under pytest.
+        """
         s = self.settings
         if not self.billable:
             raise LiveEmberDisabledError("this governor is not attached to the billable ledger")
-        if s.backend != "ember":
-            raise LiveEmberDisabledError("EDDIE_BACKEND is not 'ember'")
-        if not s.allow_live_ember:
-            raise LiveEmberDisabledError("EDDIE_ALLOW_LIVE_EMBER is not 'true'")
-        if running_under_pytest():
-            raise LiveEmberDisabledError("live Ember calls are impossible under pytest")
-        if running_in_container():
-            raise LiveEmberDisabledError("live Ember calls run only from the host CLI, never in a container")
+        check_live_flags(s, real_network=real_network)
         fs = filesystem_type(self.ledger.path)
         if fs not in SAFE_FILESYSTEMS:
             raise LedgerIntegrityError(f"ledger is on a {fs!r} filesystem; SQLite locking is only trusted on local disks")
@@ -298,65 +307,85 @@ class SpendGovernor:
         self.write_snapshot()
 
     def effective_lifetime_cap_nano(self, totals: dict[str, Any] | None = None) -> int:
-        totals = totals or self.ledger.totals()
-        persisted = totals.get("persisted_lifetime_cap_nano")
-        return self.caps.lifetime_nano if persisted is None else min(self.caps.lifetime_nano, persisted)
+        return effective_lifetime_cap_nano(self.caps, totals or self.ledger.totals())
 
     def status(self) -> dict[str, Any]:
-        totals = self.ledger.totals()
-        lifetime = self.effective_lifetime_cap_nano(totals)
-        committed = totals["committed_nano"]
-        headroom = lifetime - committed - totals["inflight_worst_case_nano"]
-        breaker = self.ledger.breaker()
-        recent = []
-        for row in self.ledger.recent_calls(20):
-            recent.append(
-                {
-                    "created_at": _iso(row["created_at"]),
-                    "region": row["region"],
-                    "effort": row["effort"],
-                    "state": row["state"],
-                    "input_tokens": row["input_tokens"],
-                    "cached_tokens": row["cached_tokens"],
-                    "output_tokens": row["output_tokens"],
-                    "reasoning_tokens": row["reasoning_tokens"],
-                    "cost_usd": _usd(row["actual_nano"] or 0),
-                    "shadow_usd": _usd(row["shadow_nano"] or 0),
-                }
-            )
-        return {
-            "generated_at": _iso(time.time()),
-            "billable": self.billable,
-            "model": EMBER_MODEL,
-            "lifetime_cap_usd": _usd(lifetime),
-            "committed_usd": _usd(committed),
-            "adjustments_usd": _usd(totals["adjustments_nano"]),
-            "inflight_reserved_usd": _usd(totals["inflight_reserved_nano"]),
-            "inflight_worst_case_usd": _usd(totals["inflight_worst_case_nano"]),
-            "headroom_usd": _usd(max(headroom, 0)),
-            "daily_cap_usd": _usd(self.caps.daily_nano),
-            "daily_committed_usd": _usd(totals["daily_committed_nano"]),
-            "run_cap_usd": _usd(self.caps.run_nano),
-            "shadow_usd": _usd(totals["shadow_nano"]),
-            "calls_by_state": totals["calls_by_state"],
-            "anomalous_calls": totals["anomalous_calls"],
-            "breaker": {"state": breaker["state"], "reason": breaker["reason"]},
-            "kill_switch": self.settings.kill_switch_path.exists(),
-            "recent": recent,
-        }
+        return build_status(self.ledger, self.caps, self.settings)
 
     def write_snapshot(self) -> Path:
-        public = self.settings.public_dir
-        public.mkdir(parents=True, exist_ok=True)
-        target = public / "status.json"
-        with _SNAPSHOT_LOCK:
-            tmp = public / f".status.json.{os.getpid()}.{uuid.uuid4().hex}.tmp"
-            with open(tmp, "w") as fh:
-                json.dump(self.status(), fh, indent=2, sort_keys=True)
-                fh.flush()
-                os.fsync(fh.fileno())
-            os.replace(tmp, target)
-        return target
+        return write_status_snapshot(self.ledger, self.caps, self.settings)
+
+
+def effective_lifetime_cap_nano(caps: Caps, totals: dict[str, Any]) -> int:
+    persisted = totals.get("persisted_lifetime_cap_nano")
+    return caps.lifetime_nano if persisted is None else min(caps.lifetime_nano, persisted)
+
+
+def caps_from_settings(settings: Settings) -> Caps:
+    return Caps(
+        lifetime_nano=settings.lifetime_cap_nano,
+        daily_nano=settings.daily_cap_nano,
+        run_nano=settings.run_cap_nano,
+        max_concurrency=settings.max_concurrency,
+    )
+
+
+def build_status(ledger: Ledger, caps: Caps, settings: Settings) -> dict[str, Any]:
+    totals = ledger.totals()
+    lifetime = effective_lifetime_cap_nano(caps, totals)
+    committed = totals["committed_nano"]
+    headroom = lifetime - committed - totals["inflight_worst_case_nano"]
+    breaker = ledger.breaker()
+    recent = []
+    for row in ledger.recent_calls(20):
+        recent.append(
+            {
+                "created_at": _iso(row["created_at"]),
+                "region": row["region"],
+                "effort": row["effort"],
+                "state": row["state"],
+                "input_tokens": row["input_tokens"],
+                "cached_tokens": row["cached_tokens"],
+                "output_tokens": row["output_tokens"],
+                "reasoning_tokens": row["reasoning_tokens"],
+                "cost_usd": _usd(row["actual_nano"] or 0),
+                "shadow_usd": _usd(row["shadow_nano"] or 0),
+            }
+        )
+    return {
+        "generated_at": _iso(time.time()),
+        "billable": ledger.billable,
+        "model": EMBER_MODEL,
+        "lifetime_cap_usd": _usd(lifetime),
+        "committed_usd": _usd(committed),
+        "adjustments_usd": _usd(totals["adjustments_nano"]),
+        "inflight_reserved_usd": _usd(totals["inflight_reserved_nano"]),
+        "inflight_worst_case_usd": _usd(totals["inflight_worst_case_nano"]),
+        "headroom_usd": _usd(max(headroom, 0)),
+        "daily_cap_usd": _usd(caps.daily_nano),
+        "daily_committed_usd": _usd(totals["daily_committed_nano"]),
+        "run_cap_usd": _usd(caps.run_nano),
+        "shadow_usd": _usd(totals["shadow_nano"]),
+        "calls_by_state": totals["calls_by_state"],
+        "anomalous_calls": totals["anomalous_calls"],
+        "breaker": {"state": breaker["state"], "reason": breaker["reason"]},
+        "kill_switch": settings.kill_switch_path.exists(),
+        "recent": recent,
+    }
+
+
+def write_status_snapshot(ledger: Ledger, caps: Caps, settings: Settings) -> Path:
+    public = settings.public_dir
+    public.mkdir(parents=True, exist_ok=True)
+    target = public / "status.json"
+    with _SNAPSHOT_LOCK:
+        tmp = public / f".status.json.{os.getpid()}.{uuid.uuid4().hex}.tmp"
+        with open(tmp, "w") as fh:
+            json.dump(build_status(ledger, caps, settings), fh, indent=2, sort_keys=True)
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.replace(tmp, target)
+    return target
 
 
 def _usd(nano: int) -> float:

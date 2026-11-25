@@ -238,9 +238,13 @@ class Caps:
 class Ledger:
     """A spend ledger. `billable=False` is the shadow ledger for mock/dgx calls (no caps)."""
 
-    def __init__(self, path: Path, *, billable: bool) -> None:
+    def __init__(self, path: Path, *, billable: bool, create: bool = True) -> None:
         self.path = Path(path)
         self.billable = billable
+        if not create and not self.path.exists():
+            raise LedgerIntegrityError(
+                f"no canonical ledger at {self.path}: run `python -m eddie.cli budget init` once"
+            )
         created_dir = not self.path.parent.exists()
         self.path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
         if created_dir and billable:
