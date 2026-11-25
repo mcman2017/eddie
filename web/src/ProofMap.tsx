@@ -55,7 +55,7 @@ export function ProofMap({ overview, selected, reveal, initialNode, onSelect }: 
     if (!wrap || !ready) return;
     const observer = new ResizeObserver(([entry]) => {
       const { width, height } = entry.contentRect;
-      engineRef.current?.resize(width, height, window.devicePixelRatio || 1);
+      if (width >= 2 && height >= 2) engineRef.current?.resize(width, height, window.devicePixelRatio || 1);
     });
     observer.observe(wrap);
     return () => observer.disconnect();
@@ -177,7 +177,7 @@ export function ProofMap({ overview, selected, reveal, initialNode, onSelect }: 
         ref={canvasRef}
         tabIndex={0}
         role="img"
-        aria-label="Zoomable map of the proof: Main at the center, proof pillars around it, declarations inside"
+        aria-label="Dependency wheel: Main at the center, the proof's chapters around it in order, declarations inside"
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}
         onPointerUp={onPointerUp}
@@ -213,7 +213,7 @@ export function ProofMap({ overview, selected, reveal, initialNode, onSelect }: 
           ))}
         </div>
         <p className="legend-note">
-          Circle area shows how many declarations a part holds.
+          Circle area shows how many declarations a part holds. An arrow from A to B means B builds on A.
           {seedOnly && " Witnesses shown so far are local seed data, not Ember output."}
         </p>
       </div>

@@ -1,14 +1,15 @@
 // The proof map: a lazily loaded, zoomable circle tree drawn on one canvas.
 //
-// Level 0 is the spine: the top-level reduction (Main and its kernel) at the center and the
-// proof pillars on a ring around it, with the heaviest cross-pillar dependencies drawn as
-// bundled curves. Every circle is a container: zooming into it packs its children inside
+// Level 0 is the dependency wheel: the top-level reduction (Main and its kernel) at the center
+// and the proof pillars on a ring around it in chapter order (clockwise from the top, from the
+// foundations to the chapters nearest Main). The heaviest net reference flows are drawn as
+// directed curves, dim at the provider and bright with an arrowhead at the consumer. Every circle is a container: zooming into it packs its children inside
 // (directories -> modules -> declarations), fetched from the read-only API on demand.
 
 import { packEnclose, packSiblings } from "d3-hierarchy";
 import { api, type MapChild, type MapPage, type Overview, type PillarSummary } from "./api";
 import { easeInOutCubic, flight, frameFor, toScreen, toWorld, type Flight, type Frame } from "./camera";
-import { COLORS, STATUS_FILL, type Status } from "./theme";
+import { COLORS, STATUS_FILL, TIER_LABEL, type Status } from "./theme";
 
 const WORLD_R = 1000;
 const EXPAND_PX = 112; // draw an aggregate's children once its screen radius reaches this
@@ -69,9 +70,12 @@ function blank(partial: Partial<VNode> & Pick<VNode, "key" | "kind" | "label">, 
   };
 }
 
+/** Second line of a ring label: the act, plus a remark step only when the match was confident. */
 function stepLabel(p: PillarSummary | undefined): string | null {
-  const step = p?.timeline?.[0];
-  return step ? `Step ${step.number}: ${step.phrase}` : null;
+  if (!p) return null;
+  const step = p.timeline?.[0];
+  const act = TIER_LABEL[p.tier] ?? "";
+  return step ? `${act}, remark step ${step.number}: ${step.phrase}` : act;
 }
 
 function fromChild(c: MapChild, parent: VNode, pillars: Map<number, PillarSummary>): VNode {
@@ -112,7 +116,7 @@ export class MapEngine {
   hover: VNode | null = null;
   selectedDecl: number | null = null;
   /** Screen bands kept clear of ring labels (breadcrumb and search on top, legend below). */
-  insets = { top: 64, bottom: 88 };
+  insets = { top: 108, bottom: 88 };
 
   private readonly ctx: CanvasRenderingContext2D;
   private width = 1;
@@ -128,7 +132,7 @@ export class MapEngine {
   private focusKey = "";
   private focusPath: VNode[] = [];
   private readonly pillars = new Map<number, PillarSummary>();
-  private readonly edges: Overview["cross_pillar_edges"];
+  private readonly flows: Overview["pillar_flows"];
   private readonly reduceMotion: boolean;
   private disposed = false;
   private fadeNow = 1;
@@ -143,7 +147,7 @@ export class MapEngine {
     if (!ctx) throw new Error("canvas 2D is unavailable");
     this.ctx = ctx;
     for (const p of overview.pillars) this.pillars.set(p.id, p);
-    this.edges = overview.cross_pillar_edges;
+    this.flows = overview.pillar_flows ?? [];
     this.reduceMotion = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
     const n = rootPage.node;
     this.root = blank(
@@ -210,7 +214,8 @@ export class MapEngine {
   private layoutSpine(root: VNode): void {
     const kids = root.children ?? [];
     const hub = kids.find((k) => k.pillarId === 0) ?? null;
-    const ring = kids.filter((k) => k !== hub);
+    const chapter = (k: VNode) => this.pillars.get(k.pillarId ?? -1)?.flow_ord ?? 999;
+    const ring = kids.filter((k) => k !== hub).sort((a, b) => chapter(a) - chapter(b));
     if (hub) {
       hub.rx = 0;
       hub.ry = 0;
@@ -686,27 +691,51 @@ export class MapEngine {
       ctx.beginPath();
       ctx.moveTo(hx + ux * (hr + 4), hy + uy * (hr + 4));
       ctx.lineTo(nx - ux * (nr + 4), ny - uy * (nr + 4));
-      ctx.strokeStyle = hexAlpha(STATUS_FILL.triaged, 0.42 * fade);
-      ctx.lineWidth = 1.5;
+      ctx.strokeStyle = hexAlpha(STATUS_FILL.triaged, 0.16 * fade);
+      ctx.lineWidth = 1;
       ctx.stroke();
     }
-    // the heaviest cross-pillar dependencies, bundled through the hub
-    const byPillar = new Map(ring.map((n) => [n.pillarId, n]));
-    const maxW = Math.log1p(Math.max(...this.edges.map((e) => e.weight), 1));
-    for (const e of this.edges) {
-      const a = byPillar.get(e.source);
-      const b = byPillar.get(e.target);
+    // net reference flows, provider -> consumer, bundled through the hub
+    const byPillar = new Map<number | null, VNode>(ring.map((n) => [n.pillarId, n]));
+    byPillar.set(hub.pillarId, hub);
+    const maxW = Math.log1p(Math.max(...this.flows.map((e) => e.net), 1));
+    for (const e of this.flows.slice(0, 44)) {
+      const a = byPillar.get(e.from);
+      const b = byPillar.get(e.to);
       if (!a || !b) continue;
-      const norm = Math.log1p(e.weight) / maxW;
+      const toHub = b === hub;
+      const norm = toHub ? 1 : Math.log1p(e.net) / maxW;
       const [ax, ay] = this.screen(a);
-      const [bx, by] = this.screen(b);
-      const [cx, cy] = toScreen(this.frame, this.width, this.height, ((a.x + b.x) / 2) * 0.18, ((a.y + b.y) / 2) * 0.18);
+      const [bx, by, br] = this.screen(b);
+      const [cx, cy] = toHub
+        ? [(ax + bx) / 2, (ay + by) / 2]
+        : toScreen(this.frame, this.width, this.height, ((a.x + b.x) / 2) * 0.18, ((a.y + b.y) / 2) * 0.18);
+      // stop at the consumer's rim, where the arrowhead sits
+      const dx = bx - cx;
+      const dy = by - cy;
+      const len = Math.hypot(dx, dy) || 1;
+      const ex = bx - (dx / len) * (br + 3);
+      const ey = by - (dy / len) * (br + 3);
+      const strong = (0.1 + 0.34 * norm * norm) * fade;
+      const stroke = ctx.createLinearGradient(ax, ay, ex, ey);
+      stroke.addColorStop(0, hexAlpha(STATUS_FILL.verified, strong * 0.12));
+      stroke.addColorStop(1, hexAlpha(STATUS_FILL.verified, strong));
       ctx.beginPath();
       ctx.moveTo(ax, ay);
-      ctx.quadraticCurveTo(cx, cy, bx, by);
-      ctx.strokeStyle = hexAlpha(STATUS_FILL.verified, (0.03 + 0.16 * norm * norm) * fade);
+      ctx.quadraticCurveTo(cx, cy, ex, ey);
+      ctx.strokeStyle = stroke;
       ctx.lineWidth = 0.75 + 2.25 * norm;
       ctx.stroke();
+      const head = 4 + 5 * norm;
+      const ux = dx / len;
+      const uy = dy / len;
+      ctx.beginPath();
+      ctx.moveTo(ex, ey);
+      ctx.lineTo(ex - ux * head * 1.7 - uy * head * 0.7, ey - uy * head * 1.7 + ux * head * 0.7);
+      ctx.lineTo(ex - ux * head * 1.7 + uy * head * 0.7, ey - uy * head * 1.7 - ux * head * 0.7);
+      ctx.closePath();
+      ctx.fillStyle = hexAlpha(STATUS_FILL.verified, Math.min(1, strong * 1.6));
+      ctx.fill();
     }
   }
 
@@ -749,7 +778,8 @@ export class MapEngine {
         ctx.strokeStyle = hexAlpha(COLORS.ink3, 0.5);
         ctx.lineWidth = 1;
         ctx.stroke();
-        this.label(this.shortLabel(it.n), colX, it.y, 16, room, COLORS.ink, 600, align, "top");
+        const chapter = this.pillars.get(it.n.pillarId ?? -1)?.chapter;
+        this.label(`${chapter != null ? `${chapter}. ` : ""}${this.shortLabel(it.n)}`, colX, it.y, 16, room, COLORS.ink, 600, align, "top");
         if (it.n.context) this.label(it.n.context, colX, it.y + lh, 13.5, room, COLORS.ink3, 400, align, "top");
       }
     }

@@ -15,5 +15,6 @@ export default defineConfig({
     },
   },
   preview: { host: "127.0.0.1", port: 4173, strictPort: true },
-  build: { outDir: "dist", sourcemap: false, emptyOutDir: true },
+  // the 3D view (three.js) is one lazily loaded chunk of about 620 kB
+  build: { outDir: "dist", sourcemap: false, emptyOutDir: true, chunkSizeWarningLimit: 700 },
 });
