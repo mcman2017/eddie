@@ -20,7 +20,7 @@ from eddie.planner import chapters as ch
 if TYPE_CHECKING:
     from eddie.api.explorer import ExplorerData
 
-LANDSCAPE_HINT = "landscape not built: run `python -m eddie.cli build-landscape`"
+LANDSCAPE_HINT = "landscape not built: run `uv run python -m eddie.cli build-landscape`"
 LIST_KEYS = ("pillar_id", "slug", "title", "category", "tier", "tier_label", "chapter", "chapters", "modules", "decls", "live",
              "dead", "ref_in", "ref_out", "net", "max_dom_share", "remark_steps", "prev", "next")
 

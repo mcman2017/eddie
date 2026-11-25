@@ -69,7 +69,7 @@ def _roots(cone_path: Path, index_path: Path) -> list[Target]:
 def pick_targets(roots: list[Target]) -> dict[str, Target]:
     """Main theorem for the zeta witnesses, then the zeta-zeros and Dirichlet-zeros statements."""
     if not roots:
-        raise ValueError("the cone has no root theorems: run `python -m eddie.cli cone build` first")
+        raise ValueError("the cone has no root theorems: run `uv run python -m eddie.cli cone build` first")
     used: set[int] = set()
 
     def take(pred: Callable[[Target], bool]) -> Target:

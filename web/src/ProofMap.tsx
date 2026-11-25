@@ -234,7 +234,7 @@ export function ProofMap({ overview, selected, reveal, initialNode, onSelect }: 
       {error && (
         <p className="map-error" role="alert">
           {error.includes("cone not built")
-            ? "The proof map needs the cone. Run python -m eddie.cli cone build, then reload."
+            ? "The proof map needs the cone. Run uv run python -m eddie.cli cone build, then reload."
             : `The map could not load: ${error}`}
         </p>
       )}

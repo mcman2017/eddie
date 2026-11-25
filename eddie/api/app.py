@@ -47,7 +47,7 @@ def create_app() -> FastAPI:
 
     def index_con() -> sqlite3.Connection:
         if not index_path.exists():
-            raise HTTPException(503, "index not built: run `python -m eddie.cli index build`")
+            raise HTTPException(503, "index not built: run `uv run python -m eddie.cli index build`")
         return connect_ro(index_path)
 
     @app.get("/healthz")
