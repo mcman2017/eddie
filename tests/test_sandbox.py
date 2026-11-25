@@ -2,13 +2,17 @@
 
 from __future__ import annotations
 
+import json
 import os
 import textwrap
+from pathlib import Path
 
 import pytest
+from matplotlib import image as mpimg
 
 from eddie.sandbox.artifacts import sweep_stale
 from eddie.sandbox.runner import Limits, SandboxRunner
+from eddie.sandbox.style import PLOT_CYCLE, RC_FILE
 
 pytestmark = [pytest.mark.anyio, pytest.mark.slow]
 
@@ -61,6 +65,12 @@ async def test_plot_and_wav_produce_artifacts_spectrogram_and_clean_qc(runner, t
     assert res.qc["zeros.wav"]["defects"] == []
     assert res.qc["gammas.png"]["defects"] == []
     assert res.qc["zeros.wav"]["duration_s"] == 2.0
+    # the automatic spectrogram is drawn for the light page: white paper, and silence stays white
+    spectrogram = next(a for a in res.artifacts if a.name == "zeros.spectrogram.png")
+    pixels = mpimg.imread(spectrogram.store_path)[..., :3]
+    assert pixels[0].min() == 1.0 and pixels[:, 0].min() == 1.0
+    luminance = pixels.mean(axis=-1)
+    assert (luminance > 0.9).mean() > 0.5 and luminance.min() < 0.35
     stored = [(a.store_path, a.sha256 + os.path.splitext(a.name)[1]) for a in res.artifacts]
     assert all(path.endswith(suffix) for path, suffix in stored)
     assert all(map(os.path.exists, (p for p, _ in stored)))  # noqa: ASYNC240
@@ -114,6 +124,73 @@ async def test_writes_outside_the_job_dir_are_denied(runner, tmp_path):
     res = await runner.run(f"open({str(target)!r}, 'w').write('x')", postprocess=False)
     assert res.status == "policy_violation"
     assert not target.exists()
+
+
+async def test_a_script_that_sets_no_style_gets_the_light_house_style(runner):
+    script = textwrap.dedent(
+        """
+        import matplotlib
+        import matplotlib.pyplot as plt
+        rc = matplotlib.rcParams
+        print("RCFILE", matplotlib.matplotlib_fname())
+        print("PAPER", rc["figure.facecolor"], rc["axes.facecolor"], rc["savefig.facecolor"])
+        print("INK", rc["text.color"], rc["axes.labelcolor"], rc["xtick.color"])
+        print("CYCLE", ",".join(rc["axes.prop_cycle"].by_key()["color"]))
+        print("GRID", rc["axes.grid"], rc["grid.color"], rc["legend.frameon"], rc["axes.spines.top"])
+        fig, ax = plt.subplots()
+        ax.plot([0, 1, 2], [0, 1, 0])
+        fig.savefig("plain.png")
+        print("FIRST LINE", ax.lines[0].get_color())
+        """
+    )
+    res = await runner.run(script)
+    assert res.status == "ok", (res.stderr, res.violations)
+    out = res.stdout.splitlines()
+    assert f"RCFILE {RC_FILE}" in out
+    assert "PAPER #FFFFFF #FFFFFF #FFFFFF" in out
+    assert "INK #18181B #44403C #6B645C" in out
+    assert "CYCLE " + ",".join(PLOT_CYCLE) in out
+    assert "GRID True #E2DDD3 False False" in out
+    assert f"FIRST LINE {PLOT_CYCLE[0]}" in out
+    plain = next(a for a in res.artifacts if a.name == "plain.png")
+    pixels = mpimg.imread(plain.store_path)[..., :3]
+    border = [pixels[0], pixels[-1], pixels[:, 0], pixels[:, -1]]
+    assert all(edge.min() == 1.0 for edge in border)  # white paper to every edge
+    assert pixels.min() < 0.5  # with ink on it
+
+
+def test_the_style_file_is_in_a_read_root_and_outside_every_write_root(runner, tmp_path):
+    job = tmp_path / "jobs" / "eddie-sbx-probe"
+    limits = json.loads(runner._limits_json(job))
+    rc = Path(runner._env(job)["MATPLOTLIBRC"]).resolve()
+    assert rc == RC_FILE.resolve() and rc.is_file()
+    assert any(rc.is_relative_to(Path(root).resolve()) for root in limits["read_roots"])
+    write_roots = [job, *map(Path, limits["extra_write_roots"])]
+    assert not any(rc.is_relative_to(root.resolve()) for root in write_roots)
+
+
+async def test_the_sandbox_cannot_change_the_style_file(runner):
+    before = RC_FILE.read_bytes()
+    # Opening for append or update changes nothing by itself, so a failed guard cannot hurt the repo.
+    script = textwrap.dedent(
+        f"""
+        rc = {str(RC_FILE)!r}
+        print("READ", len(open(rc).read()) > 0)
+        for mode in ("a", "r+"):
+            try:
+                open(rc, mode).close()
+                print("OPENED", mode)
+            except PermissionError as exc:
+                print("DENIED", mode, exc)
+        """
+    )
+    res = await runner.run(script, postprocess=False)
+    assert "READ True" in res.stdout
+    assert "DENIED a" in res.stdout and "DENIED r+" in res.stdout and "OPENED" not in res.stdout
+    assert res.status == "policy_violation"
+    assert [v["event"] for v in res.violations] == ["write", "write"]
+    assert all(v["detail"] == str(RC_FILE.resolve()) for v in res.violations)
+    assert RC_FILE.read_bytes() == before
 
 
 async def test_secrets_under_home_are_unreadable_and_env_is_scrubbed(runner, monkeypatch, offline_sandboxed_env):

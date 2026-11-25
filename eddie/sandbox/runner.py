@@ -3,7 +3,8 @@
 Each job:
 * gets a fresh `eddie-sbx-*` directory, always removed afterwards (stale ones are swept);
 * runs `python -I -B boot.py` with an environment built from scratch: no API keys, no
-  PYTHON* variables, HOME/TMPDIR inside the job;
+  PYTHON* variables, HOME/TMPDIR inside the job, and MATPLOTLIBRC set to the packaged light
+  plot style (`eddie.matplotlibrc`), so scripts need no styling code;
 * has a new session, so a wall-clock timeout kills the whole process group;
 * has stdout and stderr captured incrementally with a cap;
 * is then post-processed (spectrograms + QC) under the same guards, and its allowed
@@ -26,6 +27,7 @@ from pathlib import Path
 
 from eddie import paths
 from eddie.sandbox.artifacts import Artifact, CollectLimits, collect, sweep_stale
+from eddie.sandbox.style import RC_FILE
 
 BOOT = Path(__file__).with_name("boot.py")
 POSTPROCESS = Path(__file__).with_name("postprocess.py")
@@ -107,6 +109,9 @@ class SandboxRunner:
             "TMPDIR": str(job / "tmp"),
             "MPLCONFIGDIR": str(self.mpl_cache),
             "MPLBACKEND": "Agg",
+            # The house plot style. The file is in the package (a read root, never a write root),
+            # so sandboxed code gets the style and cannot change it for the next job.
+            "MATPLOTLIBRC": str(RC_FILE),
             "PYTHONHASHSEED": "0",
             "OMP_NUM_THREADS": "1",
             "OPENBLAS_NUM_THREADS": "1",

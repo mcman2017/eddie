@@ -6,17 +6,25 @@
 // vertex, zeta (A) and the proof wave (B), and `uMorph` blends between them.
 
 import {
-  AdditiveBlending, BufferAttribute, BufferGeometry, Color, CubicBezierCurve3, CylinderGeometry, DoubleSide, DynamicDrawUsage,
-  InstancedMesh, LineBasicMaterial, LineSegments, Matrix4, Mesh, MeshBasicMaterial, PerspectiveCamera, PlaneGeometry, Points,
-  Quaternion, Scene, ShaderMaterial, TubeGeometry, Vector2, Vector3, WebGLRenderer,
+  BackSide, BufferAttribute, BufferGeometry, ClampToEdgeWrapping, Color, CubicBezierCurve3, CylinderGeometry, DataTexture, DoubleSide,
+  DynamicDrawUsage, InstancedMesh, LinearFilter, LinearMipmapLinearFilter, Matrix4, Mesh, MeshBasicMaterial, PerspectiveCamera, PlaneGeometry, Points,
+  Quaternion, RGBAFormat, Scene, ShaderMaterial, TubeGeometry, UnsignedByteType, Vector2, Vector3, Vector4, WebGLRenderer,
 } from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { mergeGeometries } from "three/addons/utils/BufferGeometryUtils.js";
 import { easeInOutCubic } from "../camera";
-import { COLORS, DEAD_RAMP, RAMP, STATUS_FILL, TIER_FILL, srgb } from "../theme";
+import { COLORS, RAMP_WAVE, RAMP_ZETA, TIER_FILL, srgb, type RampStop } from "../theme";
 import { SX, SY, criticalLine, emptySurface, heightAt, waveSurface, zetaSurface, type Surface } from "./field";
 import type { Landscape, ProofZero } from "./landscape";
-import { APRON_FRAG, APRON_VERT, FLOW_FRAG, FLOW_VERT, GLOW_FRAG, GLOW_VERT, TERRAIN_FRAG, TERRAIN_VERT, TUBE_FRAG, TUBE_VERT } from "./shaders";
+import { bakeRamp } from "./ramp";
+import {
+  CUES, SHOTS, auditTour, compileTour, emptyFrame, sampleTour, sceneAt, shotPose, type CompiledTour, type SceneState, type ShotId,
+  type Vec3,
+} from "./tour";
+import {
+  APRON_FRAG, APRON_VERT, FLOW_FRAG, FLOW_VERT, GHOST_FRAG, GHOST_VERT, GROUND_FRAG, GROUND_VERT, MARK_FRAG, MARK_VERT, TERRAIN_FRAG,
+  TERRAIN_VERT, TUBE_FRAG, TUBE_VERT,
+} from "./shaders";
 
 export type Population = "live" | "dead" | "compare";
 export type Preset = "overview" | "dive" | "finale";
@@ -28,11 +36,22 @@ export interface Probe {
   lines: string[];
 }
 
+/** The tour reports only when something changes for the controls: about ten times in forty seconds. */
+export interface TourEvent {
+  phase: "start" | "cue" | "end" | "cancel";
+  /** false once the tour has ended, been cancelled, or is held on one frame */
+  playing: boolean;
+  shot: ShotId;
+  cue: number;
+  /** what the controls should show from now on */
+  scene: SceneState;
+}
+
 export interface StripEvents {
   onPick(slug: string): void;
   onHover(chapter: number | null): void;
   onProbe(probe: Probe | null): void;
-  onTour(running: boolean): void;
+  onTour(event: TourEvent): void;
   onContext(state: "lost" | "restored"): void;
 }
 
@@ -44,7 +63,15 @@ interface Pose {
 }
 
 const FOV = 32;
+const H_MIN = -2; // the soft clamp in field.ts keeps every height inside (H_MIN, H_MAX)
+const H_MAX = 1;
+const FLOOR = -5.2; // the table: just under the deepest well (H_MIN * SY)
+const LIGHT = new Vector3(-0.45, 0.8, 0.4).normalize(); // front-left: the relief runs along t
+const DEAD_DEEP = "#6B7480"; // dead code at its lowest; it lightens to chalk with height
+const GHOST = "#4B5563"; // the dead wave's grid in Compare
+const SHADOW = "#8C7B62"; // umber, not black: a shadow on warm paper
 const vec = (v: [number, number, number]) => new Vector3(v[0], v[1], v[2]);
+const tint = (hex: string) => vec(srgb(hex));
 
 /** Small deterministic generator, so particle phases (and screenshots) repeat exactly. */
 function mulberry(seed: number): () => number {
@@ -68,15 +95,16 @@ export class StripEngine {
   private readonly ghost: Surface;
   private readonly scratch: { re: Float32Array; im: Float32Array };
   private readonly terrain: Mesh<BufferGeometry, ShaderMaterial>;
-  private readonly wire: LineSegments<BufferGeometry, LineBasicMaterial>;
-  private readonly wirePairs: Uint32Array;
+  private readonly ghostMesh: Mesh<BufferGeometry, ShaderMaterial>;
   private readonly lamps: Points<BufferGeometry, ShaderMaterial>;
   private readonly zetaMarks: Points<BufferGeometry, ShaderMaterial>;
   private readonly waveMarks: Points<BufferGeometry, ShaderMaterial>;
   private readonly flow: Points<BufferGeometry, ShaderMaterial>;
-  private readonly tubes: Mesh<BufferGeometry, ShaderMaterial>;
+  private readonly tubes: Mesh<BufferGeometry, ShaderMaterial>[];
   private readonly lampPos: Vector3[] = [];
   private readonly disposables: { dispose(): void }[] = [];
+  private skirt = new Uint32Array(0);
+  private surfaceIndex = new Uint32Array(0);
   private labels: { el: HTMLElement; pos: Vector3; kind: "beacon" | "zero"; index: number }[] = [];
   private width = 2;
   private height = 2;
@@ -105,7 +133,11 @@ export class StripEngine {
   private selected: number | null = null;
   private hovered: number | null = null;
   private flight: { from: Pose; to: Pose; start: number; ms: number } | null = null;
-  private tour: { index: number; next: number } | null = null;
+  private readonly course: CompiledTour;
+  private readonly frame = emptyFrame();
+  /** The tour's clock. While it is set the tour owns the camera, the morph and the population. */
+  private cine: { t: number; playing: boolean; armed: boolean; cue: number } | null = null;
+  private ghostLevel = 0;
   private pulses = { zeta: new Float32Array(64), wave: new Float32Array(64), lamp: new Float32Array(64) };
   private labelKey = "";
   private pointer: { x: number; y: number; at: number } | null = null;
@@ -119,6 +151,7 @@ export class StripEngine {
   ) {
     this.freeze = opts.freeze;
     this.still = opts.freeze != null || (window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false);
+    this.course = compileTour(land.tMax);
     this.canvas = document.createElement("canvas");
     this.canvas.setAttribute("aria-label", "3D critical strip: the zeta terrain and the proof wave, with one beacon per chapter");
     this.canvas.setAttribute("role", "img");
@@ -135,13 +168,13 @@ export class StripEngine {
     this.bands = new Float32Array(land.bands).fill(1);
     this.bandTarget = new Float32Array(land.bands).fill(1);
 
+    this.buildGround();
     this.terrain = this.buildTerrain();
-    this.wire = this.buildWire();
-    this.wirePairs = this.wire.userData.pairs as Uint32Array;
+    this.ghostMesh = this.buildGhost();
     this.buildApron();
     this.lamps = this.buildBeacons();
-    this.zetaMarks = this.buildMarks(land.meta.zeta.zeros.length, STATUS_FILL.verified);
-    this.waveMarks = this.buildMarks(64, COLORS.ink);
+    this.zetaMarks = this.buildMarks(land.meta.zeta.zeros.length, COLORS.zeroRing, 0.5);
+    this.waveMarks = this.buildMarks(64, COLORS.ink2, 0.6);
     const { tubes, flow } = this.buildArcs();
     this.tubes = tubes;
     this.flow = flow;
@@ -172,10 +205,36 @@ export class StripEngine {
     return (sigma - 0.5) * SX;
   }
 
+  /**
+   * The block: the surface lattice, then a skirt of walls down to the table. Each border vertex
+   * is repeated twice in the skirt (top and foot) with the wall's outward normal, so the walls
+   * shade flat, follow the morph exactly and cannot crack away from the surface.
+   */
   private buildTerrain(): Mesh<BufferGeometry, ShaderMaterial> {
     const { nS, nT, tMax } = this.land;
     const n = nS * nT;
-    const pos = new Float32Array(n * 3);
+    const border: number[] = [];
+    const normals: [number, number][] = [];
+    const quads: number[] = [];
+    const wall = (ids: number[], nx: number, nz: number) => {
+      const first = border.length;
+      for (const id of ids) {
+        border.push(id);
+        normals.push([nx, nz]);
+      }
+      for (let s = first; s + 1 < border.length; s++) {
+        const top = n + 2 * s;
+        quads.push(top, top + 1, top + 2, top + 1, top + 3, top + 2);
+      }
+    };
+    wall(Array.from({ length: nT }, (_, j) => j * nS), -1, 0);
+    wall(Array.from({ length: nT }, (_, j) => j * nS + nS - 1), 1, 0);
+    wall(Array.from({ length: nS }, (_, i) => i), 0, 1);
+    wall(Array.from({ length: nS }, (_, i) => (nT - 1) * nS + i), 0, -1);
+    this.skirt = new Uint32Array(border);
+    const total = n + 2 * border.length;
+
+    const pos = new Float32Array(total * 3);
     for (let j = 0; j < nT; j++) {
       for (let i = 0; i < nS; i++) {
         const k = (j * nS + i) * 3;
@@ -183,7 +242,16 @@ export class StripEngine {
         pos[k + 2] = -(tMax * j) / (nT - 1);
       }
     }
-    const index = new Uint32Array((nS - 1) * (nT - 1) * 6);
+    const aSkirt = new Float32Array(total * 3);
+    border.forEach((id, s) => {
+      for (const foot of [0, 1]) {
+        const k = n + 2 * s + foot;
+        pos[k * 3] = pos[id * 3];
+        pos[k * 3 + 2] = pos[id * 3 + 2];
+        aSkirt.set([foot, normals[s][0], normals[s][1]], k * 3);
+      }
+    });
+    const surface = new Uint32Array((nS - 1) * (nT - 1) * 6);
     let q = 0;
     for (let j = 0; j < nT - 1; j++) {
       for (let i = 0; i < nS - 1; i++) {
@@ -192,16 +260,22 @@ export class StripEngine {
         const c = a + nS;
         const d = c + 1;
         // counter-clockwise seen from above (+y); alternate the diagonal so no direction is favoured
-        if ((i + j) % 2 === 0) index.set([a, b, c, b, d, c], q);
-        else index.set([a, d, c, a, b, d], q);
+        if ((i + j) % 2 === 0) surface.set([a, b, c, b, d, c], q);
+        else surface.set([a, d, c, a, b, d], q);
         q += 6;
       }
     }
+    this.surfaceIndex = surface;
+    const index = new Uint32Array(surface.length + quads.length);
+    index.set(surface);
+    index.set(quads, surface.length);
+
     const geo = new BufferGeometry();
     geo.setAttribute("position", new BufferAttribute(pos, 3));
+    geo.setAttribute("aSkirt", new BufferAttribute(aSkirt, 3));
     geo.setIndex(new BufferAttribute(index, 1));
-    const aA = new Float32Array(n * 3);
-    const aPhA = new Float32Array(n * 2);
+    const aA = new Float32Array(total * 3);
+    const aPhA = new Float32Array(total * 2);
     for (let k = 0; k < n; k++) {
       aA[k * 3] = this.zeta.h[k];
       aA[k * 3 + 1] = this.zeta.gx[k];
@@ -209,10 +283,11 @@ export class StripEngine {
       aPhA[k * 2] = this.zeta.cos[k];
       aPhA[k * 2 + 1] = this.zeta.sin[k];
     }
+    this.copyToSkirt(aA, 3);
     geo.setAttribute("aA", new BufferAttribute(aA, 3));
     geo.setAttribute("aPhA", new BufferAttribute(aPhA, 2));
     for (const [name, size] of [["aB", 3], ["aPhB", 2], ["aDiff", 1]] as const) {
-      const attr = new BufferAttribute(new Float32Array(n * size), size);
+      const attr = new BufferAttribute(new Float32Array(total * size), size);
       attr.setUsage(DynamicDrawUsage);
       geo.setAttribute(name, attr);
     }
@@ -221,12 +296,16 @@ export class StripEngine {
       fragmentShader: TERRAIN_FRAG,
       uniforms: {
         uMorph: { value: 0 }, uSweep: { value: 0 }, uSY: { value: SY }, uSX: { value: SX }, uTMax: { value: tMax },
-        uRamp: { value: RAMP.map((c) => vec(srgb(c))) }, uInk: { value: vec(srgb(COLORS.ink)) },
-        uGround: { value: vec(srgb(COLORS.ground)) }, uLight: { value: new Vector3(-0.35, 0.8, 0.5) },
-        uPhase: { value: 1 }, uCompare: { value: 0 },
+        uFloor: { value: FLOOR }, uRampA: { value: this.rampTexture(RAMP_ZETA) }, uRampB: { value: this.rampTexture(RAMP_WAVE) },
+        uInk: { value: tint(COLORS.ink) }, uPaper: { value: tint(COLORS.raised) }, uSky: { value: tint(COLORS.ground) },
+        uGold: { value: tint(COLORS.gold) }, uCrimson: { value: tint(COLORS.crimson) },
+        uRing: { value: tint(COLORS.zeroRing) }, uCentre: { value: tint(COLORS.zeroCentre) },
+        uChalk: { value: tint(COLORS.chalk) }, uSlate: { value: tint(DEAD_DEEP) },
+        uLight: { value: LIGHT.clone() }, uPhase: { value: 1 }, uCompare: { value: 0 }, uDead: { value: 0 },
+        uTime: { value: 0 }, uPxRatio: { value: 1 },
         uZetaWells: { value: Array.from({ length: 16 }, (_, i) => new Vector2(0.5, this.land.meta.zeta.zeros[i]?.t ?? -99)) },
+        uZetaPulse: { value: new Float32Array(16) },
         uZetaCount: { value: Math.min(16, this.land.meta.zeta.zeros.length) },
-        uWaveWells: { value: Array.from({ length: 64 }, () => new Vector2(0.5, -99)) }, uWaveCount: { value: 0 },
       },
       side: DoubleSide,
     });
@@ -237,27 +316,82 @@ export class StripEngine {
     return mesh;
   }
 
-  /** The dead wave as a sparse ghost wireframe, shown only in Compare. */
-  private buildWire(): LineSegments<BufferGeometry, LineBasicMaterial> {
-    const { nS, nT } = this.land;
-    const pairs: number[] = [];
-    for (let i = 0; i < nS; i += 8) for (let j = 0; j + 2 < nT; j += 2) pairs.push(j * nS + i, (j + 2) * nS + i);
-    for (let j = 0; j < nT; j += 12) for (let i = 0; i + 1 < nS; i++) pairs.push(j * nS + i, j * nS + i + 1);
-    const geo = new BufferGeometry();
-    const attr = new BufferAttribute(new Float32Array(pairs.length * 3), 3);
-    attr.setUsage(DynamicDrawUsage);
-    geo.setAttribute("position", attr);
-    const mat = new LineBasicMaterial({ color: new Color(STATUS_FILL.dead), transparent: true, opacity: 0, depthWrite: false });
-    const lines = new LineSegments(geo, mat);
-    lines.frustumCulled = false;
-    lines.visible = false;
-    lines.userData.pairs = new Uint32Array(pairs);
-    this.scene.add(lines);
-    this.disposables.push(geo, mat);
-    return lines;
+  /** Repeat each border vertex's values on its two skirt vertices. */
+  private copyToSkirt(values: Float32Array, size: number): void {
+    const n = this.land.nS * this.land.nT;
+    for (let s = 0; s < this.skirt.length; s++) {
+      const from = this.skirt[s] * size;
+      for (let c = 0; c < size; c++) {
+        values[(n + 2 * s) * size + c] = values[from + c];
+        values[(n + 2 * s + 1) * size + c] = values[from + c];
+      }
+    }
   }
 
-  /** Dead declarations as submerged foothills outside the strip, under a thin sheet of water. */
+  /**
+   * One row of texels per ramp. The bytes are display sRGB and the shader writes them unchanged
+   * (no colour space on the texture). Mipmaps prefilter the ramp where a far, steep wall crosses
+   * several stops inside one pixel, which would otherwise shimmer.
+   */
+  private rampTexture(stops: RampStop[]): DataTexture {
+    const tex = new DataTexture(bakeRamp(stops, H_MIN, H_MAX), 256, 1, RGBAFormat, UnsignedByteType);
+    tex.magFilter = LinearFilter;
+    tex.minFilter = LinearMipmapLinearFilter;
+    tex.generateMipmaps = true;
+    tex.wrapS = tex.wrapT = ClampToEdgeWrapping;
+    tex.needsUpdate = true;
+    this.disposables.push(tex);
+    return tex;
+  }
+
+  /** The table under the block, with a contact shadow around its footprint. */
+  private buildGround(): void {
+    const { tMax } = this.land;
+    const plane = new PlaneGeometry(900, 900);
+    const mat = new ShaderMaterial({
+      vertexShader: GROUND_VERT, fragmentShader: GROUND_FRAG,
+      uniforms: {
+        uColor: { value: tint(COLORS.well) }, uShadow: { value: tint(SHADOW) }, uSky: { value: tint(COLORS.ground) },
+        uFoot: { value: new Vector4(0, -tMax / 2, SX / 2, tMax / 2) },
+      },
+    });
+    const mesh = new Mesh(plane, mat);
+    mesh.rotation.x = -Math.PI / 2;
+    mesh.position.set(0, FLOOR - 0.02, -tMax / 2);
+    mesh.frustumCulled = false;
+    this.scene.add(mesh);
+    this.disposables.push(plane, mat);
+  }
+
+  /** The dead wave as a slate grid on the surface lattice, shown only in Compare. */
+  private buildGhost(): Mesh<BufferGeometry, ShaderMaterial> {
+    const src = this.terrain.geometry;
+    const geo = new BufferGeometry();
+    geo.setAttribute("position", src.getAttribute("position"));
+    geo.setAttribute("aB", src.getAttribute("aB"));
+    geo.setIndex(new BufferAttribute(this.surfaceIndex, 1));
+    const aH = new BufferAttribute(new Float32Array(src.getAttribute("position").count), 1);
+    aH.setUsage(DynamicDrawUsage);
+    geo.setAttribute("aH", aH);
+    const mat = new ShaderMaterial({
+      vertexShader: GHOST_VERT, fragmentShader: GHOST_FRAG, transparent: true, depthWrite: false, side: DoubleSide,
+      polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -2,
+      uniforms: {
+        uSY: { value: SY }, uSX: { value: SX }, uColor: { value: tint(GHOST) }, uVeil: { value: tint(COLORS.chalk) },
+        uSky: { value: tint(COLORS.ground) },
+        uOpacity: { value: 0 }, uPxRatio: { value: 1 },
+      },
+    });
+    const mesh = new Mesh(geo, mat);
+    mesh.frustumCulled = false;
+    mesh.visible = false;
+    mesh.renderOrder = 2;
+    this.scene.add(mesh);
+    this.disposables.push(geo, mat);
+    return mesh;
+  }
+
+  /** Dead declarations as unpainted chalk mounds on the table, either side of the block. */
   private buildApron(): void {
     const { nT, tMax, meta } = this.land;
     const ext = meta.grid.sigma_ext;
@@ -287,95 +421,101 @@ export class StripEngine {
       vertexShader: APRON_VERT,
       fragmentShader: APRON_FRAG,
       uniforms: {
-        uBase: { value: -3.1 }, uScale: { value: 2.7 }, uSX: { value: SX }, uDead: { value: DEAD_RAMP.map((c) => vec(srgb(c))) },
-        uInk: { value: vec(srgb(COLORS.ink)) }, uGround: { value: vec(srgb(COLORS.ground)) },
+        uBase: { value: FLOOR + 0.03 }, uScale: { value: 2.7 }, uSX: { value: SX }, uTMax: { value: tMax },
+        uExt: { value: new Vector2(ext.min, ext.max) }, uChalk: { value: tint(COLORS.chalk) }, uSlate: { value: tint(COLORS.slate) },
+        uTable: { value: tint(COLORS.well) }, uShadow: { value: tint(SHADOW) }, uSky: { value: tint(COLORS.ground) },
+        uLight: { value: LIGHT.clone() },
       },
       side: DoubleSide,
     });
     const mesh = new Mesh(geo, mat);
     mesh.frustumCulled = false;
     this.scene.add(mesh);
-    const water = new MeshBasicMaterial({ color: new Color(STATUS_FILL.live), transparent: true, opacity: 0.09, depthWrite: false, side: DoubleSide });
-    const span = (ext.max - 1) * SX;
-    for (const side of [-1, 1]) {
-      const sheet = new PlaneGeometry(span, tMax);
-      const m = new Mesh(sheet, water);
-      m.rotation.x = -Math.PI / 2;
-      m.position.set(side * (SX / 2 + span / 2), -0.2, -tMax / 2);
-      m.renderOrder = 2;
-      this.scene.add(m);
-      this.disposables.push(sheet);
-    }
-    this.disposables.push(geo, mat, water);
+    this.disposables.push(geo, mat);
   }
 
-  private glowMaterial(color: string, ring: number): ShaderMaterial {
+  private markMaterial(ring: number): ShaderMaterial {
     const mat = new ShaderMaterial({
-      vertexShader: GLOW_VERT, fragmentShader: GLOW_FRAG, transparent: true, depthWrite: false, blending: AdditiveBlending,
-      uniforms: { uColor: { value: vec(srgb(color)) }, uPx: { value: 1 }, uRing: { value: ring } },
+      vertexShader: MARK_VERT, fragmentShader: MARK_FRAG, transparent: true,
+      uniforms: { uInk: { value: tint(COLORS.ink) }, uPaper: { value: tint(COLORS.raised) }, uPx: { value: 1 }, uRing: { value: ring } },
     });
     this.disposables.push(mat);
     return mat;
   }
 
-  private pointCloud(count: number, mat: ShaderMaterial): Points<BufferGeometry, ShaderMaterial> {
+  private pointCloud(count: number, mat: ShaderMaterial, order: number): Points<BufferGeometry, ShaderMaterial> {
     const geo = new BufferGeometry();
-    for (const [name, size] of [["position", 3], ["aSize", 1], ["aPulse", 1], ["aAlpha", 1]] as const) {
+    for (const [name, size] of [["position", 3], ["aSize", 1], ["aPulse", 1], ["aAlpha", 1], ["aColor", 3]] as const) {
       const attr = new BufferAttribute(new Float32Array(count * size), size);
       attr.setUsage(DynamicDrawUsage);
       geo.setAttribute(name, attr);
     }
     const points = new Points(geo, mat);
     points.frustumCulled = false;
-    points.renderOrder = 4;
+    points.renderOrder = order;
     this.scene.add(points);
     this.disposables.push(geo);
     return points;
   }
 
-  /** One light column and one lamp per chapter. Lamp positions are fixed, so nothing moves in the morph. */
+  /** One column and one head per chapter, in its act's colour. Positions are fixed, so nothing moves in the morph. */
   private buildBeacons(): Points<BufferGeometry, ShaderMaterial> {
     const chapters = this.land.meta.chapters;
     const maxLive = Math.max(...chapters.map((c) => c.live), 1);
-    const column = new CylinderGeometry(1, 1, 1, 10, 1, true);
-    const mat = new MeshBasicMaterial({ transparent: true, opacity: 0.3, blending: AdditiveBlending, depthWrite: false, side: DoubleSide });
-    const beams = new InstancedMesh(column, mat, chapters.length);
+    const column = new CylinderGeometry(1, 1, 1, 12, 1, true);
+    // opaque columns; a slightly wider white hull drawn inside-out behind each gives it a casing
+    const body = new MeshBasicMaterial({ side: DoubleSide });
+    const hull = new MeshBasicMaterial({ color: new Color(COLORS.raised), side: BackSide });
+    const beams = new InstancedMesh(column, body, chapters.length);
+    const hulls = new InstancedMesh(column, hull, chapters.length);
     const m = new Matrix4();
-    const lamps = this.pointCloud(chapters.length, this.glowMaterial(COLORS.ink, 0));
+    const lamps = this.pointCloud(chapters.length, this.markMaterial(0), 5);
     const pos = lamps.geometry.getAttribute("position") as BufferAttribute;
     const size = lamps.geometry.getAttribute("aSize") as BufferAttribute;
     const alpha = lamps.geometry.getAttribute("aAlpha") as BufferAttribute;
+    const color = lamps.geometry.getAttribute("aColor") as BufferAttribute;
     chapters.forEach((c, i) => {
       const share = Math.sqrt(c.live / maxLive);
       const top = c.tier === "main" ? 7.6 : 3.3 + 2.9 * share;
       // the column rises out of the zeta surface where the chapter stands
       const bottom = Math.min(heightAt(this.land, this.zeta, c.sigma, c.t) * SY, 0) - 0.4;
-      const r = c.tier === "main" ? 0.16 : 0.05 + 0.08 * share;
+      const r = c.tier === "main" ? 0.15 : 0.06 + 0.06 * share;
       const x = this.wx(c.sigma);
       const z = -c.t;
       m.compose(new Vector3(x, (top + bottom) / 2, z), new Quaternion(), new Vector3(r, top - bottom, r));
       beams.setMatrixAt(i, m);
       beams.setColorAt(i, new Color(TIER_FILL[c.tier]));
+      m.compose(new Vector3(x, (top + bottom) / 2, z), new Quaternion(), new Vector3(r + 0.05, top - bottom, r + 0.05));
+      hulls.setMatrixAt(i, m);
       this.lampPos.push(new Vector3(x, top, z));
       pos.setXYZ(i, x, top, z);
-      size.setX(i, c.tier === "main" ? 2.6 : 1.1 + 1.0 * share);
+      size.setX(i, c.tier === "main" ? 1.5 : 0.75 + 0.5 * share);
       alpha.setX(i, 1);
+      color.setXYZ(i, ...srgb(TIER_FILL[c.tier]));
     });
-    beams.instanceMatrix.needsUpdate = true;
+    for (const mesh of [hulls, beams]) {
+      mesh.instanceMatrix.needsUpdate = true;
+      mesh.frustumCulled = false;
+      this.scene.add(mesh);
+    }
     if (beams.instanceColor) beams.instanceColor.needsUpdate = true;
-    beams.frustumCulled = false;
-    beams.renderOrder = 3;
-    this.scene.add(beams);
-    this.disposables.push(column, mat);
+    this.disposables.push(column, body, hull);
     return lamps;
   }
 
-  private buildMarks(count: number, color: string): Points<BufferGeometry, ShaderMaterial> {
-    return this.pointCloud(count, this.glowMaterial(color, 1));
+  /** Ring markers over zeros; `hole` is the radius of the open centre (a wider hole is a lighter ring). */
+  private buildMarks(count: number, hex: string, hole: number): Points<BufferGeometry, ShaderMaterial> {
+    const marks = this.pointCloud(count, this.markMaterial(hole), 4);
+    const color = marks.geometry.getAttribute("aColor") as BufferAttribute;
+    for (let i = 0; i < count; i++) color.setXYZ(i, ...srgb(hex));
+    return marks;
   }
 
-  /** Net flows as tubes (dim at the provider, bright at the consumer) with particles riding them. */
-  private buildArcs(): { tubes: Mesh<BufferGeometry, ShaderMaterial>; flow: Points<BufferGeometry, ShaderMaterial> } {
+  /**
+   * Net flows as opaque arcs with particles riding them, in the act colour of the chapter the
+   * flow leaves. An arc is thin and pale at its provider and full at its consumer.
+   */
+  private buildArcs(): { tubes: Mesh<BufferGeometry, ShaderMaterial>[]; flow: Points<BufferGeometry, ShaderMaterial> } {
     const chapters = this.land.meta.chapters;
     const at = new Map(chapters.map((c, i) => [c.id, i]));
     const arcs = this.land.meta.arcs.filter((a) => at.has(a.from) && at.has(a.to));
@@ -386,56 +526,69 @@ export class StripEngine {
     const p2: number[] = [];
     const p3: number[] = [];
     const seed: number[] = [];
+    const tone: number[] = [];
     const rand = mulberry(20261125);
     for (const arc of arcs) {
       const a = this.lampPos[at.get(arc.from) as number];
       const b = this.lampPos[at.get(arc.to) as number];
+      const rgb = srgb(TIER_FILL[chapters[at.get(arc.from) as number].tier]);
       const w = arc.final ? 1 : Math.log1p(arc.net) / top;
       const lift = 1.6 + 0.13 * a.distanceTo(b);
       const c1 = a.clone().lerp(b, 0.25).add(new Vector3(0, lift, 0));
       const c2 = a.clone().lerp(b, 0.75).add(new Vector3(0, lift, 0));
-      const tube = new TubeGeometry(new CubicBezierCurve3(a, c1, c2, b), 28, 0.03 + 0.07 * w, 5, false);
-      tube.setAttribute("aW", new BufferAttribute(new Float32Array(tube.getAttribute("position").count).fill(w), 1));
+      const radius = 0.035 + 0.065 * w;
+      const tube = new TubeGeometry(new CubicBezierCurve3(a, c1, c2, b), 28, radius, 6, false);
+      const count = tube.getAttribute("position").count;
+      tube.setAttribute("aW", new BufferAttribute(new Float32Array(count).fill(w), 1));
+      tube.setAttribute("aR", new BufferAttribute(new Float32Array(count).fill(radius), 1));
+      const colors = new Float32Array(count * 3);
+      for (let k = 0; k < count; k++) colors.set(rgb, k * 3);
+      tube.setAttribute("aColor", new BufferAttribute(colors, 3));
       parts.push(tube);
-      const comets = 3 + Math.round(9 * w);
+      const comets = 2 + Math.round(5 * w);
       for (let k = 0; k < comets; k++) {
         const phase = rand();
         const speed = 0.045 + 0.05 * rand();
-        const size = 0.34 + 0.3 * w;
+        const size = 0.34 + 0.26 * w;
         for (let trail = 0; trail < 3; trail++) {
           p0.push(a.x, a.y, a.z);
           p1.push(c1.x, c1.y, c1.z);
           p2.push(c2.x, c2.y, c2.z);
           p3.push(b.x, b.y, b.z);
           seed.push(phase, speed, size * (1 - 0.22 * trail), trail * 0.014);
+          tone.push(...rgb);
         }
       }
     }
     const merged = parts.length ? mergeGeometries(parts) : new BufferGeometry();
     parts.forEach((g) => g.dispose());
-    const tubeMat = new ShaderMaterial({
-      vertexShader: TUBE_VERT, fragmentShader: TUBE_FRAG, transparent: true, depthWrite: false, blending: AdditiveBlending,
-      uniforms: { uColor: { value: vec(srgb(STATUS_FILL.triaged)) }, uFlow: { value: 1 } },
+    const tubes = [0.9, 0].map((hullPx) => {
+      const mat = new ShaderMaterial({
+        vertexShader: TUBE_VERT, fragmentShader: TUBE_FRAG, side: hullPx ? BackSide : DoubleSide,
+        uniforms: { uPaper: { value: tint(COLORS.raised) }, uPx: { value: 1 }, uPxRatio: { value: 1 }, uHull: { value: hullPx }, uFlow: { value: 1 } },
+      });
+      const mesh = new Mesh(merged, mat);
+      mesh.frustumCulled = false;
+      this.scene.add(mesh);
+      this.disposables.push(mat);
+      return mesh;
     });
-    const tubes = new Mesh(merged, tubeMat);
-    tubes.frustumCulled = false;
-    tubes.renderOrder = 3;
-    this.scene.add(tubes);
     const geo = new BufferGeometry();
     geo.setAttribute("position", new BufferAttribute(new Float32Array(p0), 3));
     geo.setAttribute("aP1", new BufferAttribute(new Float32Array(p1), 3));
     geo.setAttribute("aP2", new BufferAttribute(new Float32Array(p2), 3));
     geo.setAttribute("aP3", new BufferAttribute(new Float32Array(p3), 3));
     geo.setAttribute("aSeed", new BufferAttribute(new Float32Array(seed), 4));
+    geo.setAttribute("aColor", new BufferAttribute(new Float32Array(tone), 3));
     const flowMat = new ShaderMaterial({
-      vertexShader: FLOW_VERT, fragmentShader: FLOW_FRAG, transparent: true, depthWrite: false, blending: AdditiveBlending,
-      uniforms: { uColor: { value: vec(srgb(STATUS_FILL.verified)) }, uTime: { value: 0 }, uPx: { value: 1 }, uFlow: { value: 1 } },
+      vertexShader: FLOW_VERT, fragmentShader: FLOW_FRAG, transparent: true,
+      uniforms: { uPaper: { value: tint(COLORS.raised) }, uTime: { value: 0 }, uPx: { value: 1 }, uFlow: { value: 1 } },
     });
     const flow = new Points(geo, flowMat);
     flow.frustumCulled = false;
-    flow.renderOrder = 4;
+    flow.renderOrder = 3;
     this.scene.add(flow);
-    this.disposables.push(merged, tubeMat, geo, flowMat);
+    this.disposables.push(merged, geo, flowMat);
     return { tubes, flow };
   }
 
@@ -475,6 +628,7 @@ export class StripEngine {
       ph[k * 2] = this.wave.cos[k];
       ph[k * 2 + 1] = this.wave.sin[k];
     }
+    this.copyToSkirt(b, 3);
     aB.needsUpdate = true;
     aPhB.needsUpdate = true;
     if (this.compare) {
@@ -482,16 +636,9 @@ export class StripEngine {
       const d = aDiff.array as Float32Array;
       for (let k = 0; k < n; k++) d[k] = this.wave.log[k] - this.ghost.log[k];
       aDiff.needsUpdate = true;
-      const wp = this.wire.geometry.getAttribute("position") as BufferAttribute;
-      const out = wp.array as Float32Array;
-      const tp = this.terrain.geometry.getAttribute("position").array as Float32Array;
-      for (let i = 0; i < this.wirePairs.length; i++) {
-        const k = this.wirePairs[i];
-        out[i * 3] = tp[k * 3];
-        out[i * 3 + 1] = this.ghost.h[k] * SY + 0.04;
-        out[i * 3 + 2] = tp[k * 3 + 2];
-      }
-      wp.needsUpdate = true;
+      const aH = this.ghostMesh.geometry.getAttribute("aH") as BufferAttribute;
+      (aH.array as Float32Array).set(this.ghost.h);
+      aH.needsUpdate = true;
     }
     this.waveDirty = false;
   }
@@ -505,12 +652,9 @@ export class StripEngine {
       if (i < count) {
         const z = zeros[i];
         pos.setXYZ(i, this.wx(z.sigma), 0.45, -z.t);
-        size.setX(i, 1.7);
+        size.setX(i, 1.3);
       } else size.setX(i, 0);
     }
-    const wells = this.terrain.material.uniforms.uWaveWells.value as Vector2[];
-    for (let i = 0; i < wells.length; i++) wells[i].set(zeros[i]?.sigma ?? 0.5, zeros[i]?.t ?? -99);
-    this.terrain.material.uniforms.uWaveCount.value = Math.min(count, wells.length);
     pos.needsUpdate = true;
     size.needsUpdate = true;
     this.waveMarks.geometry.setDrawRange(0, count);
@@ -524,11 +668,15 @@ export class StripEngine {
     if (on) this.kick();
   }
 
-  resize(width: number, height: number, dpr: number): void {
+  /**
+   * `crisp` renders at the display's own pixel ratio (whole pixels, so ink lines stay sharp)
+   * instead of a ratio fitted to a pixel budget: for recording, where sharpness matters more.
+   */
+  resize(width: number, height: number, dpr: number, crisp = false): void {
     if (width < 2 || height < 2) return;
     this.width = width;
     this.height = height;
-    const ratio = Math.min(dpr, 2, Math.sqrt(2_600_000 / (width * height)));
+    const ratio = crisp ? Math.min(Math.max(1, Math.round(dpr)), 2) : Math.min(dpr, 2, Math.sqrt(2_600_000 / (width * height)));
     this.renderer.setPixelRatio(ratio);
     this.renderer.setSize(width, height, false);
     this.camera.aspect = width / height;
@@ -536,13 +684,15 @@ export class StripEngine {
     this.camera.setViewOffset(width, height, 0, Math.round(height * 0.07), width, height);
     this.camera.updateProjectionMatrix();
     const px = (height * ratio) / (2 * Math.tan((FOV * Math.PI) / 360));
-    for (const p of [this.lamps, this.zetaMarks, this.waveMarks, this.flow]) p.material.uniforms.uPx.value = px;
+    for (const p of [this.lamps, this.zetaMarks, this.waveMarks, this.flow, ...this.tubes]) p.material.uniforms.uPx.value = px;
+    for (const p of [this.terrain, this.ghostMesh, ...this.tubes]) p.material.uniforms.uPxRatio.value = ratio;
     this.labelKey = "";
     this.kick();
   }
 
   /** 0 = the zeta strip, 1 = the proof wave. Animated changes run up the strip as a front. */
   setMorph(target: number, animate: boolean): void {
+    if (this.cine) return; // the tour owns the scene; the controls catch up when it ends
     const to = Math.min(1, Math.max(0, target));
     if (!animate || this.still) {
       this.morph = this.morphTo = to;
@@ -559,6 +709,7 @@ export class StripEngine {
 
   /** Harmonics 1..count are summed (low bands are the foundations, high bands the chapters near Main). */
   setBandCount(count: number): void {
+    if (this.cine) return;
     this.bandCount = Math.min(this.land.bands, Math.max(1, Math.round(count)));
     for (let b = 0; b < this.land.bands; b++) this.bandTarget[b] = b < this.bandCount ? 1 : 0;
     if (this.still) this.bands.set(this.bandTarget);
@@ -567,10 +718,12 @@ export class StripEngine {
   }
 
   setPopulation(pop: Population): void {
+    if (this.cine) return;
     this.compare = pop === "compare";
     this.popTarget = pop === "dead" ? 1 : 0;
     if (this.still) this.pop = this.popTarget;
-    this.wire.visible = this.compare;
+    this.ghostLevel = this.compare ? 1 : 0;
+    this.ghostMesh.visible = this.compare;
     this.waveDirty = this.marksDirty = true;
     this.kick();
   }
@@ -583,7 +736,7 @@ export class StripEngine {
   }
 
   setOrbit(on: boolean): void {
-    this.controls.autoRotate = on && !this.still;
+    this.controls.autoRotate = on && !this.still && !this.cine;
     this.kick();
   }
 
@@ -629,9 +782,22 @@ export class StripEngine {
 
   private chapterPose(index: number): Pose {
     const c = this.land.meta.chapters[index];
+    // Main is the tour's last frame: opening its chapter when the tour ends does not move the camera
+    if (c.tier === "main") return this.shotPoseOf("summit");
     const lamp = this.lampPos[index];
-    return { target: new Vector3(lamp.x * 0.6, 0.2, lamp.z), radius: c.tier === "main" ? 34 : 27,
-             azimuth: c.side < 0 ? -0.5 : c.side > 0 ? 0.5 : 0.3, polar: 0.98 };
+    return { target: new Vector3(lamp.x * 0.6, 0.2, lamp.z), radius: 27, azimuth: c.side < 0 ? -0.5 : c.side > 0 ? 0.5 : 0.3, polar: 0.98 };
+  }
+
+  private poseOf(eye: Vec3, target: Vec3): Pose {
+    const d = new Vector3(eye[0] - target[0], eye[1] - target[1], eye[2] - target[2]);
+    const radius = d.length();
+    return { target: new Vector3(target[0], target[1], target[2]), radius, azimuth: Math.atan2(d.x, d.z),
+             polar: Math.acos(Math.min(1, Math.max(-1, d.y / radius))) };
+  }
+
+  private shotPoseOf(id: ShotId): Pose {
+    const p = shotPose(this.course, id);
+    return this.poseOf(p.eye, p.target);
   }
 
   private currentPose(): Pose {
@@ -659,7 +825,9 @@ export class StripEngine {
       this.controls.enableDamping = true;
       const from = this.currentPose();
       const d = from.target.distanceTo(to.target) + Math.abs(from.radius - to.radius);
-      this.flight = { from, to, start: this.clock, ms: Math.min(2200, Math.max(1200, 700 + d * 22)) };
+      const turn = Math.abs(from.azimuth - to.azimuth) + Math.abs(from.polar - to.polar);
+      // already there: no flight, so nothing waits on one
+      this.flight = d < 0.02 && turn < 0.002 ? null : { from, to, start: this.clock, ms: Math.min(2200, Math.max(1200, 700 + d * 22)) };
     }
     this.labelKey = "";
     this.kick();
@@ -672,7 +840,9 @@ export class StripEngine {
 
   flyToChapter(slug: string, instant = false): void {
     const i = this.land.meta.chapters.findIndex((c) => c.slug === slug);
-    if (i >= 0) this.fly(this.chapterPose(i), instant);
+    if (i < 0) return;
+    this.stopTour();
+    this.fly(this.chapterPose(i), instant);
   }
 
   flyToPoint(sigma: number, t: number): void {
@@ -680,18 +850,104 @@ export class StripEngine {
     this.fly({ target: new Vector3(this.wx(sigma), -0.6, -t), radius: 15, azimuth: 0.35, polar: 0.95 });
   }
 
-  /** Chapters 1 to the last on fixed flights: the same framing on every take. */
-  startTour(): void {
-    this.tour = { index: -1, next: this.clock };
-    this.events.onTour(true);
+  /** Go to a shot's key frame on its own. The scene (wave, population) is the caller's to set. */
+  flyToShot(id: ShotId, instant = false): void {
+    this.stopTour();
+    this.fly(this.shotPoseOf(id), instant);
+  }
+
+  // --- the visual tour --------------------------------------------------------------------------
+
+  /**
+   * Play the tour: one continuous move through the five shots, the same on every take. A take
+   * from the start first returns to the opening frame (the overview of the zeta strip) and only
+   * then starts the clock; on a freshly loaded view that takes no time at all.
+   */
+  playTour(from = 0): void {
+    this.cine = null;
+    this.flight = null;
+    this.controls.autoRotate = false;
+    const start = Math.min(this.course.duration, Math.max(0, from));
+    if (start === 0 && !this.still) {
+      this.fly(this.preset("overview"));
+      this.setMorph(0, true);
+      this.setPopulation("live");
+      this.setBandCount(this.land.bands);
+    }
+    this.cine = { t: start, playing: true, armed: false, cue: -1 };
+    this.report("start");
     this.kick();
   }
 
+  /** Show the tour's exact frame at `seconds` and hold it: for deep links and screenshots. */
+  seekTour(seconds: number): void {
+    this.flight = null;
+    this.cine = { t: Math.min(this.course.duration, Math.max(0, seconds)), playing: false, armed: true, cue: -1 };
+    this.applyTour(this.cine.t);
+    this.kick();
+  }
+
+  /** Leave the tour where it is. The normal animators finish whatever the scene was doing. */
   stopTour(): void {
-    if (this.tour) {
-      this.tour = null;
-      this.events.onTour(false);
+    const c = this.cine;
+    if (!c) return;
+    const scene = sceneAt(c.t);
+    this.cine = null;
+    this.sweep = 0;
+    if (this.morph !== (scene.wave ? 1 : 0)) this.setMorph(scene.wave ? 1 : 0, true);
+    this.setPopulation(scene.population);
+    this.events.onTour({ phase: "cancel", playing: false, shot: SHOTS[this.frame.shot].id, cue: this.frame.cue, scene });
+    this.kick();
+  }
+
+  private report(phase: TourEvent["phase"]): void {
+    const c = this.cine;
+    if (!c) return;
+    const cue = Math.max(0, c.cue);
+    this.events.onTour({ phase, playing: c.playing && phase !== "end", shot: CUES[cue].shot, cue, scene: sceneAt(c.t) });
+  }
+
+  /** Put the camera and the scene on the tour's frame at time t. */
+  private applyTour(t: number): void {
+    const c = this.cine;
+    if (!c) return;
+    // without motion the tour is a slideshow: each caption's frame at rest, cut to on the same clock
+    const f = sampleTour(this.course, this.still && c.playing ? CUES[this.cueIndex(t)].still : t, this.frame);
+    this.camera.position.set(f.eye[0], f.eye[1], f.eye[2]);
+    this.controls.target.set(f.target[0], f.target[1], f.target[2]);
+    this.camera.lookAt(this.controls.target);
+    this.morph = this.morphTo = f.morph;
+    this.morphStart = -1;
+    this.sweep = f.sweeping ? 0.35 : 0;
+    const comparing = f.ghost > 0;
+    if (f.pop !== this.pop || comparing !== this.compare) {
+      this.pop = f.pop;
+      this.popTarget = f.pop >= 0.5 ? 1 : 0;
+      this.compare = comparing;
+      this.ghostMesh.visible = comparing;
+      this.waveDirty = this.marksDirty = true;
     }
+    this.ghostLevel = f.ghost;
+    if (f.cue !== c.cue) {
+      c.cue = f.cue;
+      this.report("cue");
+    }
+  }
+
+  private cueIndex(t: number): number {
+    let cue = 0;
+    for (let i = 0; i < CUES.length; i++) if (t >= CUES[i].from) cue = i;
+    return cue;
+  }
+
+  private finishTour(): void {
+    const c = this.cine;
+    if (!c) return;
+    this.report("end");
+    this.cine = null;
+    this.sweep = 0;
+    const main = this.land.meta.chapters.find((ch) => ch.tier === "main");
+    if (main) this.events.onPick(main.slug);
   }
 
   // --- input ------------------------------------------------------------------------------------
@@ -724,7 +980,7 @@ export class StripEngine {
     const box = this.canvas.getBoundingClientRect();
     const x = e.clientX - box.left;
     const y = e.clientY - box.top;
-    if (e.buttons) {
+    if (e.buttons || this.cine?.playing) {
       this.events.onProbe(null);
       return;
     }
@@ -816,10 +1072,20 @@ export class StripEngine {
   private tick = (now: number): void => {
     this.raf = 0;
     if (!this.active || this.disposed || this.contextLost) return;
-    const dt = this.last ? Math.min(0.1, (now - this.last) / 1000) : 0;
+    const raw = this.last ? (now - this.last) / 1000 : 0;
+    const dt = Math.min(0.1, raw);
     this.last = now;
     this.clock = now;
     const time = this.freeze ?? now / 1000;
+
+    const cine = this.cine;
+    if (cine && !cine.armed && !this.flight && this.morphStart < 0 && this.pop === this.popTarget) cine.armed = true;
+    const touring = !!cine && cine.armed;
+    if (cine && touring) {
+      // absolute time, so the tour is the same at 8 frames a second as at 60; a long hitch slows it
+      if (cine.playing) cine.t = Math.min(this.course.duration, cine.t + Math.min(0.25, raw));
+      this.applyTour(cine.t);
+    }
 
     if (this.morphStart >= 0) {
       const e = Math.min(1, (now - this.morphStart) / 1700);
@@ -837,7 +1103,7 @@ export class StripEngine {
         mixing = true;
       }
     }
-    const pop = this.approach(this.pop, this.popTarget, 1.8, dt);
+    const pop = touring ? this.pop : this.approach(this.pop, this.popTarget, 1.8, dt);
     if (pop !== this.pop) {
       this.pop = pop;
       mixing = true;
@@ -845,16 +1111,9 @@ export class StripEngine {
     if (mixing || this.waveDirty) this.updateWave();
     if (!mixing && this.marksDirty) this.placeWaveMarks();
 
-    if (this.tour && !this.flight && now >= this.tour.next) {
-      const next = this.tour.index + 1;
-      if (next >= this.land.meta.chapters.length) this.stopTour();
-      else {
-        this.tour.index = next;
-        this.tour.next = now + 4600;
-        this.events.onPick(this.land.meta.chapters[next].slug);
-      }
-    }
-    if (this.flight) {
+    if (touring) {
+      // the tour placed the camera above
+    } else if (this.flight) {
       const f = this.flight;
       const e = easeInOutCubic(Math.min(1, (now - f.start) / f.ms));
       let turn = f.to.azimuth - f.from.azimuth;
@@ -867,15 +1126,18 @@ export class StripEngine {
         polar: f.from.polar + (f.to.polar - f.from.polar) * e,
       });
       if (e >= 1) this.flight = null;
-    } else this.controls.update();
+    } else this.controls.update(dt || null);
 
     const u = this.terrain.material.uniforms;
     u.uMorph.value = this.morph;
     u.uSweep.value = this.sweep;
-    u.uCompare.value = this.compare ? 1 : 0;
-    this.wire.material.opacity = this.compare ? 0.5 * this.morph : 0;
+    u.uCompare.value = this.ghostLevel;
+    u.uDead.value = this.pop;
+    u.uTime.value = time;
+    (u.uZetaPulse.value as Float32Array).set(this.pulses.zeta.subarray(0, 16));
+    this.ghostMesh.material.uniforms.uOpacity.value = this.ghostLevel * this.morph;
     const quiet = 1 - 0.72 * this.morph; // the layout steps back while the wave is on stage
-    this.tubes.material.uniforms.uFlow.value = quiet;
+    for (const tube of this.tubes) tube.material.uniforms.uFlow.value = quiet;
     this.flow.material.uniforms.uFlow.value = quiet;
     this.flow.material.uniforms.uTime.value = time;
     this.fade(this.zetaMarks, this.land.meta.zeta.zeros.length, 1 - this.morph, this.pulses.zeta, dt);
@@ -890,9 +1152,12 @@ export class StripEngine {
       document.documentElement.dataset.strip = "ready";
       (window as unknown as { __eddieStrip?: unknown }).__eddieStrip = this.debug();
     }
-    // keep going while anything can still move; a frozen or reduced-motion view draws on demand
-    const moving = this.flight || this.tour || mixing || this.morphStart >= 0 || this.waveDirty || this.marksDirty;
-    if (!this.still || moving) this.kick();
+    if (cine && cine === this.cine && cine.playing && touring && cine.t >= this.course.duration) this.finishTour();
+    // Keep going while anything can still move; a frozen or reduced-motion view draws on demand.
+    // The next frame is requested directly: kick() restarts the clock for a view waking from idle,
+    // and going through it here would make every frame's dt zero.
+    const moving = this.flight || this.cine?.playing || mixing || this.morphStart >= 0 || this.waveDirty || this.marksDirty;
+    if ((!this.still || moving) && !document.hidden) this.raf = requestAnimationFrame(this.tick);
   };
 
   private fade(points: Points<BufferGeometry, ShaderMaterial>, count: number, level: number, pulses: Float32Array, dt: number): void {
@@ -913,17 +1178,22 @@ export class StripEngine {
     const key = `${c.position.x.toFixed(3)},${c.position.y.toFixed(3)},${c.position.z.toFixed(3)},${this.controls.target.x.toFixed(3)},${this.controls.target.z.toFixed(3)},${this.width},${this.height},${this.morph.toFixed(2)},${this.selected},${this.hovered}`;
     if (key === this.labelKey) return;
     this.labelKey = key;
+    // zero badges are wide: place the nearest first and drop any that would touch one already placed
     const drawn: [number, number][] = [];
-    for (const label of this.labels) {
+    const order = this.labels
+      .map((label) => ({ label, far: label.kind === "zero" ? label.pos.distanceToSquared(c.position) : -1 }))
+      .sort((a, b) => a.far - b.far);
+    for (const { label } of order) {
       const [x, y, ok] = this.project(label.pos);
       let show = ok && x > 8 && x < this.width - 8 && y > 44 && y < this.height - 8;
       if (label.kind === "zero") {
-        show = show && this.morph < 0.4 && !drawn.some(([dx, dy]) => Math.hypot(dx - x, dy - y) < 26);
+        show = show && this.morph < 0.4 && x < this.width - 170 && !drawn.some(([dx, dy]) => Math.abs(dx - x) < 170 && Math.abs(dy - y) < 25);
         if (show) drawn.push([x, y]);
       }
       label.el.style.display = show ? "" : "none";
       if (!show) continue;
-      label.el.style.transform = `translate(${Math.round(x)}px, ${Math.round(y)}px)`;
+      // whole pixels at rest; during the tour's slow drifts whole pixels would step visibly
+      label.el.style.transform = this.cine?.playing ? `translate(${x.toFixed(2)}px, ${y.toFixed(2)}px)` : `translate(${Math.round(x)}px, ${Math.round(y)}px)`;
       if (label.kind === "beacon") {
         label.el.dataset.state = label.index === this.selected ? "selected" : label.index === this.hovered ? "hover" : "";
       }
@@ -932,14 +1202,20 @@ export class StripEngine {
 
   private debug() {
     return {
-      settled: () => !this.flight && !this.tour && this.morphStart < 0 && !this.waveDirty && !this.marksDirty && this.pop === this.popTarget
-        && this.bands.every((b, i) => b === this.bandTarget[i]),
+      settled: () => !this.flight && !this.waveDirty && !this.marksDirty && (this.cine
+        ? !this.cine.playing
+        : this.morphStart < 0 && this.pop === this.popTarget && this.bands.every((b, i) => b === this.bandTarget[i])),
       state: () => ({
-        morph: this.morph, bands: this.bandCount, pop: this.popTarget, compare: this.compare, selected: this.selected,
+        morph: this.morph, bands: this.bandCount, pop: this.popTarget, popLevel: this.pop, compare: this.compare, selected: this.selected,
         zeros: this.currentZeros().length, frames: this.frames, camera: this.camera.position.toArray().map((v) => +v.toFixed(3)),
         renderer: this.renderer.info.render, pixelRatio: this.renderer.getPixelRatio(),
       }),
       lose: () => this.renderer.forceContextLoss(),
+      tour: () => ({ duration: this.course.duration, shots: SHOTS.map((s) => ({ id: s.id, at: s.at })), t: this.cine?.t ?? null,
+                     playing: !!this.cine?.playing, cue: this.cine?.cue ?? null }),
+      tourSeek: (seconds: number) => this.seekTour(seconds),
+      tourPlay: (from = 0) => this.playTour(from),
+      tourAudit: () => auditTour(this.course),
     };
   }
 

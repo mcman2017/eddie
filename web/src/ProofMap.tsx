@@ -2,7 +2,9 @@ import { useEffect, useRef, useState, type KeyboardEvent, type PointerEvent } fr
 import { api, type MapPage, type Overview } from "./api";
 import { MapEngine, type VNode } from "./mapEngine";
 import { StatusMark } from "./StatusMark";
-import { STATUS_LABEL, type Status } from "./theme";
+import { STATUS_LABEL, actName, type Status } from "./theme";
+
+const TIERS = ["foundations", "machinery", "bottleneck", "main"] as const;
 
 interface Props {
   overview: Overview;
@@ -212,6 +214,14 @@ export function ProofMap({ overview, selected, reveal, initialNode, onSelect }: 
             </span>
           ))}
         </div>
+        <div className="legend-items">
+          {TIERS.map((tier) => (
+            <span className={`legend-item tier-${tier}`} key={tier}>
+              <i className="act-chip" />
+              {actName(tier)}
+            </span>
+          ))}
+        </div>
         <p className="legend-note">
           Circle area shows how many declarations a part holds. An arrow from A to B means B builds on A.
           {seedOnly && " Witnesses shown so far are local seed data, not Ember output."}
@@ -224,7 +234,7 @@ export function ProofMap({ overview, selected, reveal, initialNode, onSelect }: 
       {error && (
         <p className="map-error" role="alert">
           {error.includes("cone not built")
-            ? "The proof map needs the cone. Run python -m eddie.cli cone build, then reload."
+            ? "The proof map needs the cone. Run uv run python -m eddie.cli cone build, then reload."
             : `The map could not load: ${error}`}
         </p>
       )}

@@ -1,0 +1,60 @@
+{
+  "surface": {
+    "page": "#FAF8F4",
+    "well": "#F3EFE6",
+    "card": "#FFFFFF",
+    "line": "#E2DDD3",
+    "lineStrong": "#CFC8BA"
+  },
+  "ink": {
+    "primary": "#18181B",
+    "secondary": "#44403C",
+    "muted": "#6B645C"
+  },
+  "act": {
+    "foundations": "#1D3FBF",
+    "machinery": "#099268",
+    "bottleneck": "#D946EF",
+    "main": "#D9480F"
+  },
+  "criticalLine": {
+    "core": "#FFC531",
+    "casing": "#B3122D"
+  },
+  "zero": {
+    "ring": "#12B886",
+    "centre": "#F5B301"
+  },
+  "dead": {
+    "chalk": "#D9D5CC",
+    "slate": "#8A8F98"
+  },
+  "status": {
+    "critical": "#C81E1E"
+  },
+  "rampZeta": [
+    [-1.25, "#15207F"],
+    [-0.8, "#1F45D6"],
+    [-0.45, "#0C93A6"],
+    [-0.15, "#22C389"],
+    [0.05, "#A9CE48"],
+    [0.22, "#F8CC30"],
+    [0.4, "#F59A0C"],
+    [0.56, "#EC5A3A"],
+    [0.7, "#CE3320"],
+    [0.86, "#A8187E"],
+    [1.0, "#8A1570"]
+  ],
+  "rampWave": [
+    [-1.6, "#2B2784"],
+    [-1.15, "#2C5BCB"],
+    [-0.7, "#1295B5"],
+    [-0.25, "#27BD86"],
+    [0.02, "#A3C13A"],
+    [0.28, "#F8B90F"],
+    [0.62, "#F26645"],
+    [1.0, "#D43A3D"]
+  ],
+  "rampSpectrogram": ["#FFFFFF", "#FDE9B8", "#F9B45C", "#EE6A4D", "#C2267A", "#5B21A6", "#1E1B6E"],
+  "plotCycle": ["#1D3FBF", "#D9480F", "#D946EF", "#099268"]
+}

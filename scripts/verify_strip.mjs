@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 // Drives headless Chrome over the DevTools protocol to check the 3D critical strip end to end:
-// WebGL comes up, every mode and camera preset renders, a beacon click opens its chapter, the
-// tour buttons move, and nothing logs an error. Loopback only; needs Node 22+ (built-in
+// WebGL comes up on a light sky, every mode and camera preset renders, a beacon click opens its
+// chapter, the visual tour and its five shots land on their frames, the capture layout puts the
+// drawer away, and nothing logs an error. Loopback only; needs Node 22+ (built-in
 // WebSocket and fetch) and a running app (make api after npm --prefix web run build, or make dev).
 //
 //   node scripts/verify_strip.mjs [--base http://127.0.0.1:8765] [--out data/verify] [--port 9333]
@@ -99,6 +100,14 @@ async function main() {
     const { data } = await send("Page.captureScreenshot", { format: "png" });
     writeFileSync(`${out}/${name}.png`, Buffer.from(data, "base64"));
   };
+  const press = async (key, code) => {
+    for (const type of ["keyDown", "keyUp"]) await send("Input.dispatchKeyEvent", { type, key, code: key, windowsVirtualKeyCode: code });
+  };
+  // mean luminance (0..1) of a small square of the page as it is actually drawn
+  const luminance = async (x, y, size = 24) => {
+    const { data } = await send("Page.captureScreenshot", { format: "png", clip: { x, y, width: size, height: size, scale: 1 } });
+    return evaluate(`new Promise((done) => { const img = new Image(); img.onload = () => { const c = document.createElement('canvas'); c.width = img.width; c.height = img.height; const g = c.getContext('2d'); g.drawImage(img, 0, 0); const d = g.getImageData(0, 0, c.width, c.height).data; let s = 0; for (let i = 0; i < d.length; i += 4) s += 0.2126 * d[i] + 0.7152 * d[i + 1] + 0.0722 * d[i + 2]; done(s / (d.length / 4) / 255); }; img.src = 'data:image/png;base64,${data}'; })`);
+  };
   const click = async (selector) => {
     const box = await evaluate(`(() => { const r = document.querySelector(${JSON.stringify(selector)})?.getBoundingClientRect(); return r ? [r.left + r.width / 2, r.top + r.height / 2] : null; })()`);
     if (!box) return false;
@@ -122,6 +131,20 @@ async function main() {
   const state = await evaluate("window.__eddieStrip.state()");
   check(state.renderer.triangles > 50000 && state.renderer.calls >= 6, `scene drawn: ${state.renderer.triangles} triangles in ${state.renderer.calls} calls`);
   check((await evaluate("document.querySelectorAll('[data-testid=beacon]').length")) === (await evaluate("fetch('/api/chapters').then(r => r.json()).then(j => j.chapters.length)")), "one beacon label per chapter");
+  // light theme: the sky of the 3D view (a corner the model never reaches) and the page are paper
+  const sky = await luminance(40, 300);
+  check(sky > 0.9, `the 3D sky is light (luminance ${sky.toFixed(2)})`);
+  check((await evaluate("getComputedStyle(document.documentElement).colorScheme")) === "light", "the page declares a light colour scheme");
+  check(await evaluate("!!document.querySelector('[data-testid=strip-legend] .legend-ramp') && document.querySelectorAll('[data-testid=strip-legend] .act-chip').length === 4"), "the legend shows the height ramp and the four acts");
+  const gate = await evaluate("fetch('/api/landscape').then(r => r.json()).then(j => j.gate)");
+  check(!!gate && (await evaluate("document.querySelector('[data-testid=gate-mark]')?.textContent ?? ''")).includes(`gates ${gate.share.toFixed(1)}%`), `the gate theorem is marked on its chapter (${gate?.full_name}, ${gate?.share.toFixed(1)}%)`);
+  check(await click("[data-testid=findings-toggle]"), "opened the findings card");
+  const takeaway = await evaluate("fetch('/api/landscape').then(r => r.json()).then(j => j.takeaway)");
+  check(!!takeaway && (await evaluate("document.querySelector('[data-testid=takeaway]')?.textContent")) === takeaway, "the findings card leads with the takeaway built from the numbers");
+  await sleep(150);
+  await shot("21-findings");
+  check(await click("[data-testid=findings-toggle]"), "closed the findings card");
+  await sleep(100);
   await shot("01-strip-overview");
 
   // 2) every deterministic state
@@ -141,7 +164,7 @@ async function main() {
   // half-way through the morph: both sets of phase lines are on screen, cross-faded
   await open("freeze=12.5&cam=dive");
   await ready();
-  await evaluate("(() => { const el = document.querySelector('.strip-mode input'); const set = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set; set.call(el, '50'); el.dispatchEvent(new Event('input', { bubbles: true })); })()");
+  await evaluate("(() => { const el = document.querySelector('[data-testid=blend]'); const set = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set; set.call(el, '50'); el.dispatchEvent(new Event('input', { bubbles: true })); })()");
   await until("Math.abs(window.__eddieStrip.state().morph - 0.5) < 0.02 && window.__eddieStrip.settled()", "the blend slider to reach the middle");
   await sleep(150);
   await shot("12-mid-morph");
@@ -180,16 +203,87 @@ async function main() {
   await shot("11-chapter-after-click");
 
   // 5) the synth and the tour run from their buttons
-  check(await click(".strip-actions .play"), "clicked Play spectral harmonics");
+  check(await click("[data-testid=harmonics-play]"), "clicked Play spectral harmonics");
   await until("/Zero 1 of 12: t = 14\\.1347, sounding at 372 Hz/.test(document.querySelector('.strip-hud')?.textContent ?? '')", "the first zero to sound at its mapped pitch");
   await until("/Zero 2 of 12/.test(document.querySelector('.strip-hud')?.textContent ?? '')", "the second partial to enter");
-  check(await click(".strip-actions .play"), "stopped the chord");
-  check(await click(".strip-cams button:nth-child(4)"), "started the tour");
-  await until(`document.querySelector('[data-testid=chapter-guide]')?.dataset.slug === ${JSON.stringify(chapters[0][0])}`, "the tour to open chapter 1");
-  await until(`document.querySelector('[data-testid=chapter-guide]')?.dataset.slug === ${JSON.stringify(chapters[1][0])}`, "the tour to move on to chapter 2");
-  check(await click(".strip-cams button:nth-child(4)"), "stopped the tour");
+  check(await click("[data-testid=harmonics-play]"), "stopped the chord");
 
-  // 6) frame pacing (software GL here: an upper bound on trouble, not a prediction)
+  // 5b) the visual tour, frame by frame. A frozen page can be put on any frame of the tour, so
+  //     each shot is captured exactly, and each pill must land on its shot's key frame.
+  await open("freeze=12.5");
+  await ready();
+  const tour = await evaluate("window.__eddieStrip.tour()");
+  check(tour.duration >= 30 && tour.duration <= 45 && tour.shots.length === 5, `the tour has five shots and lasts ${tour.duration} s`);
+  const audit = await evaluate("window.__eddieStrip.tourAudit()");
+  check(audit.minSpeed > 0.5 && audit.jerk < 0.2 && audit.minHeight > 3,
+    `the camera never stops or jolts mid-tour (slowest ${audit.minSpeed.toFixed(2)} units/s, largest step in velocity ${(100 * audit.jerk).toFixed(1)}%, lowest eye ${audit.minHeight.toFixed(2)})`);
+  check((await evaluate("document.querySelectorAll('[data-testid=shot-pill]').length")) === 5, "five shot pills");
+  const caption = "document.querySelector('[data-testid=strip-caption]')";
+  for (const [i, s] of tour.shots.entries()) {
+    await evaluate(`window.__eddieStrip.tourSeek(${s.at})`);
+    await until(`${caption}?.dataset.shot === '${s.id}' && window.__eddieStrip.settled()`, `the tour frame of shot ${i + 1}`);
+    const seek = await evaluate("window.__eddieStrip.state()");
+    await sleep(150);
+    await shot(`${13 + i}-tour-${i + 1}-${s.id}`);
+    check(await click(`[data-testid=shot-pill][data-shot="${s.id}"]`), `clicked pill ${i + 1}`);
+    await until(`${caption}?.dataset.shot === '${s.id}' && window.__eddieStrip.tour().t === null && window.__eddieStrip.settled()`, `pill ${i + 1} to settle`);
+    const pill = await evaluate("window.__eddieStrip.state()");
+    check(Math.hypot(...seek.camera.map((v, k) => v - pill.camera[k])) < 0.05 && seek.morph === pill.morph && seek.pop === pill.pop && seek.compare === pill.compare,
+      `pill ${i + 1} (${s.id}) lands on the tour's key frame`);
+  }
+  await evaluate("window.__eddieStrip.tourSeek(25.6)");
+  await until("window.__eddieStrip.settled() && window.__eddieStrip.state().popLevel === 1", "the tour's dead-code frame");
+  await sleep(150);
+  await shot("18-tour-dead-code");
+
+  // 5c) the tour on a running clock: it advances, Escape hands the view back, and it ends by
+  //     opening the last chapter on the zeta strip.
+  await open("");
+  await ready();
+  check(await click("[data-testid=tour-play]"), "started the visual tour");
+  await until("window.__eddieStrip.tour().playing && window.__eddieStrip.tour().t > 0.3", "the tour's clock to start");
+  const t0 = [Date.now(), (await evaluate("window.__eddieStrip.tour().t"))];
+  await sleep(2500);
+  const t1 = [Date.now(), (await evaluate("window.__eddieStrip.tour().t"))];
+  const pace = (t1[1] - t0[1]) / ((t1[0] - t0[0]) / 1000);
+  check(pace > 0.5 && pace < 1.1, `the tour keeps wall-clock time whatever the frame rate (${pace.toFixed(2)} s per second)`);
+  await press("Escape", 27);
+  await until(`window.__eddieStrip.tour().t === null && ${caption}?.dataset.cue === ''`, "Escape to stop the tour and drop its caption");
+  await evaluate("window.__eddieStrip.tourPlay(38.6)");
+  await until(`document.querySelector('[data-testid=chapter-guide]')?.dataset.slug === ${JSON.stringify(last)} && window.__eddieStrip.tour().t === null`, "the tour to end by opening the last chapter", 30000);
+  const ended = await evaluate("window.__eddieStrip.state()");
+  check(ended.morph === 0 && (await evaluate("location.hash")).includes("shot=5"), "the tour ends on the zeta strip at the summit");
+
+  // 5d) the capture layout: top bar, canvas, legend and caption; the drawer comes in with the last chapter
+  await open("cinema&freeze=12.5");
+  await ready();
+  const hidden = "(() => { const r = document.querySelector('.side').getBoundingClientRect(); return r.left >= innerWidth - 1; })()";
+  check(await evaluate(hidden), "cinema: the drawer is away");
+  check(await evaluate("document.querySelector('.strip-host').getBoundingClientRect().width === innerWidth"), "cinema: the canvas fills the frame");
+  check(await evaluate("getComputedStyle(document.querySelector('.strip-console')).display === 'none' && getComputedStyle(document.querySelector('.view-tabs')).display === 'none'"), "cinema: the console and the view tabs are put away");
+  check(await evaluate("['.topbar', '[data-testid=strip-legend]', '[data-testid=strip-caption]'].every((s) => { const r = document.querySelector(s)?.getBoundingClientRect(); return r && r.width > 0 && r.height > 0; })"), "cinema: the top bar, the legend and the caption stay");
+  await evaluate("window.__eddieStrip.tourSeek(20.8)");
+  await until(`${caption}?.dataset.shot === 'morph' && window.__eddieStrip.settled()`, "a tour frame in the capture layout");
+  await sleep(150);
+  await shot("19-cinema-wave");
+  await open("cinema");
+  await ready();
+  await evaluate("window.__eddieStrip.tourPlay(38.8)");
+  await until(`document.querySelector('.app').classList.contains('drawer-open') && document.querySelector('[data-testid=chapter-guide]')?.dataset.slug === ${JSON.stringify(last)}`, "cinema: the drawer to open on the last chapter when the tour ends", 30000);
+  await sleep(900);
+  check(!(await evaluate(hidden)), "cinema: the drawer slid in over the canvas");
+  check(await evaluate("document.querySelector('.strip-host').getBoundingClientRect().width === innerWidth"), "cinema: the canvas kept its size");
+  await shot("20-cinema-summit");
+
+  // 6) live cross-fades. Every screenshot above is a frozen frame, where state is assigned
+  //    directly; on a running clock the surface has to travel to the dead population by itself.
+  await open("mode=wave");
+  await ready();
+  check(await click("[data-testid=pop-dead]"), "clicked Dead code on a running page");
+  await until("window.__eddieStrip.state().popLevel === 1 && window.__eddieStrip.settled()", "the surface to reach the dead population");
+  check((await evaluate("window.__eddieStrip.state().popLevel")) === 1, "the live cross-fade to the dead wave completes");
+
+  // 7) frame pacing (software GL here: an upper bound on trouble, not a prediction)
   const frames = await evaluate("new Promise((done) => { const t = []; const step = (now) => { t.push(now); if (t.length < 90) requestAnimationFrame(step); else { const d = t.slice(1).map((v, i) => v - t[i]).sort((a, b) => a - b); done({ median: d[Math.floor(d.length / 2)], p95: d[Math.floor(d.length * 0.95)] }); } }; requestAnimationFrame(step); })");
   console.log(`note frame time on ${gl}: median ${frames.median.toFixed(1)} ms, p95 ${frames.p95.toFixed(1)} ms`);
 

@@ -10,6 +10,9 @@ export interface BudgetSnapshot {
   daily_committed_usd?: number;
   breaker?: { state: string; reason: string | null };
   kill_switch?: boolean;
+  /** billable calls in the ledger, by the state they ended in (settled is a completed, charged call) */
+  calls_by_state?: Record<string, number>;
+  anomalous_calls?: number;
 }
 
 export type Tier = "foundations" | "machinery" | "bottleneck" | "main";

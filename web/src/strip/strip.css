@@ -59,35 +59,23 @@
   height: 26px;
   padding: 0 5px;
   border-radius: 13px;
-  background: rgba(11, 18, 32, 0.82);
-  border: 1.5px solid currentColor;
+  /* white disc, act-colour ring, ink hairline: it separates from every terrain colour */
+  background: var(--raised);
+  border: 2.5px solid var(--act, var(--ink));
+  box-shadow: 0 0 0 1px rgba(24, 24, 27, 0.55);
+  color: var(--ink);
   font-size: 14px;
   font-weight: 700;
   font-variant-numeric: tabular-nums;
-}
-
-.beacon-label.tier-foundations {
-  color: #6aa5ec;
-}
-
-.beacon-label.tier-machinery {
-  color: #86b6ef;
-}
-
-.beacon-label.tier-bottleneck {
-  color: #b9d5f7;
-}
-
-.beacon-label.tier-main {
-  color: var(--verified);
 }
 
 .beacon-title {
   display: none;
   padding: 3px 9px;
   border-radius: 6px;
-  background: rgba(17, 26, 44, 0.94);
+  background: var(--raised);
   border: 1px solid var(--hair-strong);
+  box-shadow: 0 2px 10px rgba(24, 24, 27, 0.12);
   color: var(--ink);
   font-size: 14.5px;
   font-weight: 600;
@@ -101,46 +89,139 @@
 
 .beacon-label[data-state="selected"] b {
   background: var(--ink);
-  color: var(--ground);
-  border-color: var(--ink);
+  color: var(--raised);
 }
 
 .zero-label {
-  translate: 12px -50%;
+  translate: 14px -50%;
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.94);
+  border: 1px solid var(--hair-strong);
   font-size: 12.5px;
-  color: var(--ink-2);
+  color: var(--ink);
   font-variant-numeric: tabular-nums;
-  text-shadow: 0 0 6px var(--ground), 0 0 2px var(--ground);
+  white-space: nowrap;
 }
 
+/* one plain sentence first; the exact maths sits under it, smaller */
 .strip-caption {
   position: absolute;
   z-index: 1;
   top: 60px;
   left: 18px;
-  max-width: 690px;
+  max-width: 596px;
   margin: 0;
-  padding: 7px 11px;
+  padding: 9px 13px 10px;
   border-radius: 8px;
-  background: rgba(11, 18, 32, 0.78);
-  font-size: 15px;
+  background: rgba(255, 255, 255, 0.94);
+  border: 1px solid var(--hair-strong);
+  font-size: 13.5px;
   line-height: 1.45;
   color: var(--ink-2);
   pointer-events: none;
 }
 
-.strip-cams {
+.strip-caption strong {
+  display: block;
+  font-size: 16.5px;
+  font-weight: 650;
+  line-height: 1.35;
+  color: var(--ink);
+}
+
+.strip-caption strong + span {
+  display: block;
+  margin-top: 3px;
+}
+
+/* the shot list: the tour's five shots, each also a camera preset of its own */
+.strip-shots {
   position: absolute;
+  z-index: 2;
   top: 14px;
   right: 18px;
-  display: inline-flex;
+  width: 236px;
+  display: grid;
+  gap: 6px;
+  transition: opacity 0.4s;
+}
+
+.tour-play {
+  padding: 10px 14px;
+  border: 0;
+  border-radius: 8px;
+  background: var(--ink);
+  color: var(--raised);
+  font-size: 15px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.shot-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
   border: 1px solid var(--hair-strong);
   border-radius: 8px;
   overflow: hidden;
-  background: rgba(11, 18, 32, 0.9);
+  background: var(--raised);
 }
 
-.strip-cams button,
+.shot-list li + li {
+  border-top: 1px solid var(--hair);
+}
+
+.shot-list button {
+  display: block;
+  width: 100%;
+  padding: 7px 12px;
+  border: 0;
+  background: none;
+  text-align: left;
+  font-size: 14px;
+  color: var(--ink-2);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.shot-list button:hover {
+  color: var(--ink);
+  background: var(--hover);
+}
+
+.shot-list button[aria-pressed="true"] {
+  background: var(--ink);
+  color: var(--raised);
+  font-weight: 600;
+}
+
+.shot-extras {
+  display: flex;
+  gap: 6px;
+}
+
+.shot-extras button {
+  flex: 1;
+  padding: 6px 8px;
+  border: 1px solid var(--hair-strong);
+  border-radius: 8px;
+  background: var(--raised);
+  font-size: 13px;
+  color: var(--ink-2);
+  cursor: pointer;
+}
+
+.shot-extras button:hover {
+  color: var(--ink);
+}
+
+.shot-extras button[aria-pressed="true"] {
+  background: var(--ink);
+  border-color: var(--ink);
+  color: var(--raised);
+}
+
 .strip-mode button,
 .strip-toggle {
   padding: 8px 13px;
@@ -151,17 +232,11 @@
   cursor: pointer;
 }
 
-.strip-cams button + button {
-  border-left: 1px solid var(--hair-strong);
-}
-
-.strip-cams button:hover,
 .strip-mode button:hover,
 .strip-toggle:hover {
   color: var(--ink);
 }
 
-.strip-cams button[aria-pressed="true"],
 .strip-mode button[aria-pressed="true"],
 .strip .segmented button[aria-pressed="true"] {
   background: var(--ink);
@@ -179,8 +254,8 @@
   gap: 10px;
   padding: 12px 16px 10px;
   border-radius: 12px;
-  border: 1px solid var(--hair);
-  background: rgba(11, 18, 32, 0.95);
+  border: 1px solid var(--hair-strong);
+  background: rgba(255, 255, 255, 0.96);
   white-space: nowrap;
 }
 
@@ -201,7 +276,7 @@
 .strip-mode input {
   width: 190px;
   margin: 0 12px;
-  accent-color: var(--verified);
+  accent-color: var(--ink);
 }
 
 .strip-wave {
@@ -224,7 +299,7 @@
 
 .strip-bands input {
   width: 210px;
-  accent-color: var(--triaged);
+  accent-color: var(--ink);
 }
 
 .strip-actions {
@@ -241,7 +316,7 @@
 
 .strip-toggle[aria-expanded="true"] {
   color: var(--ink);
-  border-color: var(--verified);
+  border-color: var(--ink);
 }
 
 .strip-hud {
@@ -256,14 +331,15 @@
 .strip-hover {
   position: absolute;
   z-index: 1;
-  top: 134px;
-  left: 22px;
+  top: 176px;
+  left: 18px;
   display: grid;
   gap: 2px;
   padding: 9px 12px;
   border-radius: 8px;
-  background: rgba(17, 26, 44, 0.94);
+  background: var(--raised);
   border: 1px solid var(--hair-strong);
+  box-shadow: 0 6px 24px rgba(24, 24, 27, 0.12);
   font-size: 14px;
   color: var(--ink-2);
   pointer-events: none;
@@ -277,14 +353,15 @@
 .strip-card {
   position: absolute;
   top: 62px;
-  right: 18px;
+  right: 266px;
   width: 430px;
-  max-height: calc(100% - 250px);
+  max-height: calc(100% - 262px);
   overflow-y: auto;
   padding: 14px 16px 12px;
   border-radius: 10px;
   border: 1px solid var(--hair-strong);
-  background: rgba(17, 26, 44, 0.96);
+  background: var(--raised);
+  box-shadow: 0 6px 24px rgba(24, 24, 27, 0.1);
 }
 
 .strip-card h2 {
@@ -322,8 +399,8 @@
 
 .finding-stable,
 .finding-exact {
-  border-color: rgba(205, 226, 251, 0.5);
-  color: var(--verified);
+  border-color: var(--ink);
+  color: var(--ink);
 }
 
 .finding-encoding-specific,
@@ -351,7 +428,7 @@
   top: 8px;
   bottom: 22px;
   width: 1px;
-  background: rgba(240, 239, 236, 0.5);
+  background: rgba(24, 24, 27, 0.35);
   pointer-events: none;
 }
 
@@ -360,7 +437,7 @@
   top: 2px;
   padding: 2px 7px;
   border-radius: 5px;
-  background: var(--ground);
+  background: var(--raised);
   border: 1px solid var(--hair-strong);
   font-size: 12px;
   color: var(--ink);
@@ -382,7 +459,7 @@
   height: 0;
   margin-right: 6px;
   vertical-align: middle;
-  border-top: 2px solid var(--triaged);
+  border-top: 2px solid var(--ink);
 }
 
 .swatch-dead {
@@ -411,4 +488,168 @@
 .strip-empty p {
   max-width: 560px;
   margin: 0;
+}
+
+/* --- legend ------------------------------------------------------------------------------- */
+
+.strip-legend {
+  position: absolute;
+  z-index: 1;
+  left: 18px;
+  bottom: 16px;
+  width: 204px;
+  display: grid;
+  gap: 7px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid var(--hair-strong);
+  background: rgba(255, 255, 255, 0.94);
+  font-size: 12.5px;
+  color: var(--ink-2);
+  pointer-events: none;
+}
+
+.legend-ramp {
+  height: 10px;
+  border-radius: 3px;
+  border: 1px solid rgba(24, 24, 27, 0.35);
+}
+
+.legend-ends {
+  display: flex;
+  justify-content: space-between;
+  margin-top: -3px;
+  font-size: 11.5px;
+  color: var(--ink-3);
+}
+
+.legend-ends span:nth-child(2) {
+  color: var(--ink);
+  font-weight: 600;
+}
+
+.legend-acts,
+.legend-keys {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.legend-acts li,
+.legend-keys li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--ink);
+}
+
+.legend-keys {
+  padding-top: 6px;
+  border-top: 1px solid var(--hair);
+}
+
+.legend-keys li {
+  color: var(--ink-2);
+}
+
+/* the critical line as it is drawn: a gold core in a crimson casing */
+.key-line {
+  flex: none;
+  width: 18px;
+  height: 3px;
+  background: var(--gold);
+  box-shadow: 0 0 0 2px var(--crimson);
+  margin: 0 1px;
+}
+
+.key-dead {
+  flex: none;
+  width: 18px;
+  height: 9px;
+  border-radius: 2px;
+  background: var(--chalk);
+  border: 1px dashed var(--dead);
+}
+
+/* --- capture layout (#cinema) ---------------------------------------------------------------
+   The frame is the top bar, the canvas, the legend and one caption. The caption becomes a
+   lower third; the shot list stays while idle and steps away while the tour runs. */
+
+.strip.is-cinema .strip-console,
+.strip.is-cinema .strip-card,
+.strip.is-cinema .strip-hover {
+  display: none;
+}
+
+.strip.is-cinema .strip-caption {
+  top: auto;
+  bottom: 30px;
+  left: 50%;
+  translate: -50% 0;
+  width: max-content;
+  max-width: min(1240px, calc(100% - 520px));
+  padding: 13px 24px 14px;
+  border-radius: 12px;
+  text-align: center;
+}
+
+.strip.is-cinema .strip-caption strong {
+  font-size: 24px;
+  line-height: 1.3;
+}
+
+.strip.is-cinema .strip-caption span {
+  display: none;
+}
+
+.strip.is-cinema.is-touring .strip-shots {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.strip.is-cinema.is-touring .strip-host canvas {
+  cursor: none;
+}
+
+/* with the drawer in, the caption centres on the part of the canvas that is still in view */
+.app-cinema.drawer-open .strip.is-cinema .strip-caption {
+  left: calc((100% - 600px) / 2 + 60px);
+  max-width: calc(100% - 600px - 380px);
+}
+
+/* the one-sentence takeaway heads the findings card */
+.takeaway {
+  margin: 0 0 12px;
+  padding: 9px 12px;
+  border-left: 3px solid var(--ink);
+  background: var(--well);
+  font-size: 15px;
+  font-weight: 600;
+  line-height: 1.4;
+  color: var(--ink);
+}
+
+/* the chapter that holds the proof's gate theorem: a tag, and a slow ring leaving its badge */
+.beacon-gate {
+  padding: 2px 9px;
+  border-radius: 999px;
+  background: var(--ink);
+  color: var(--raised);
+  font-size: 12.5px;
+  font-weight: 600;
+}
+
+.beacon-label.is-gate b {
+  animation: gate-ring 2.6s ease-out infinite;
+}
+
+@keyframes gate-ring {
+  from {
+    box-shadow: 0 0 0 1px rgba(24, 24, 27, 0.55), 0 0 0 0 rgba(217, 72, 15, 0.6);
+  }
+  to {
+    box-shadow: 0 0 0 1px rgba(24, 24, 27, 0.55), 0 0 0 16px rgba(217, 72, 15, 0);
+  }
 }

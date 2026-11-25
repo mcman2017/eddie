@@ -44,6 +44,18 @@ On 2026-11-20 a formal Lean 4 proof of the Riemann Hypothesis was released: 175,
 
 **What the wave is and is not.** It is an empirical, name-blind transform of the dependency graph that shares the basis functions of a Dirichlet series. It is not a number-theoretic object and proves nothing about ζ: it has no functional equation, no Euler product and no distinguished line, and σ = 1/2 is drawn only to share ζ's frame. Where an individual zero or dip sits depends on conventions (which prime codes which feature), so `findings.json` marks every statement as exact, stable across an ensemble of encodings, or specific to this numbering. Bottlenecks of the proof are measured by dominators (one theorem gates 84.6% of the live cone), not by the wave. The chapter beacons on the strip are a layout, not a computation.
 
+### Day 2.5: a light studio, a visual tour and the first-call checklist, still $0
+
+| | |
+|---|---|
+| One light theme | The explorer is ink on gallery paper. Chrome is neutral and hue is spent only on data: the four acts (cobalt, jade, magenta-violet, ember; checked for colour-blind separation on every surface), the height of the two surfaces, and the critical line. A status is a shape (check badge, dot, ring, dashed ring), never a hue. Every value lives in `web/src/palette.json`, mirrored for the Python plots in `eddie/sandbox/style.py`; a test keeps the two equal. |
+| The strip | A painted relief model: height is colour (two multi-hue ramps baked in OKLab), contours and phase lines are ink, the critical line is a gold core in a crimson casing, each zero of ζ is ringed and badged, and nothing is additive (a glow adds up to white on paper). Dead code is the same wave drained to grey at its true height; Compare lays it over the live surface as a grid. |
+| Visual tour | **Play Visual Tour** runs one continuous 40 s move through five shots (zeros on the line, the 20-chapter funnel, the morph into the proof wave, dead code against the live proof, the summit at `Main.lean`). The camera follows a spline that is at rest only at the two ends, the scene changes on the same clock, and the tour is identical at any frame rate. Each shot is also a pill and a key (1 to 5). |
+| Capture layout | `#cinema` keeps the top bar, the canvas, the legend and one lower-third caption, draws the canvas at the display's own pixel ratio, and slides the chapter drawer in over the canvas when the tour opens the last chapter. |
+| The gate | The proof's real bottleneck is measured on the dependency graph: `allChi` gates **84.6%** of the live proof. It is tagged on chapter 20's beacon and named in the tour's last caption. The findings card leads with one sentence generated from the numbers; it never calls a dip of the wave a bottleneck. |
+| Plots | Sandboxed scripts get a house plot style through a packaged `MATPLOTLIBRC`, so generated code spends nothing on styling. The seed witnesses are redrawn on white, and a rejected render is shown above the one that replaced it, each under its verdict. |
+| A fix | Outside frozen screenshots the 3D view's frame time was always zero, so Live / Dead / Compare never reshaped the surface on a running page. Fixed, with a live check that fails without the fix. |
+
 ## The Metabolic Spend Governor
 
 Contest rule: spend above **$10** on Ember disqualifies the entry, and the dashboard's alerts do not stop traffic. Ember also defaults to `effort="max"`, and above 200K input tokens the **whole** request costs 3×. So every call passes through a governor that sits physically in the request path (`eddie/llm/`):
@@ -67,7 +79,7 @@ The rest of the governor:
 
 ```bash
 uv sync
-uv run pytest                                                   # 399 tests, offline, $0
+uv run pytest                                                   # 428 tests, offline, $0
 uv run python scripts/fetch_riemann_archive.py --sample         # synthetic mini tree, instant
 uv run python -m eddie.cli index build --src data/sample/tree
 uv run python -m eddie.cli index search zeta
@@ -95,12 +107,26 @@ make dev        # API on 127.0.0.1:8765 + Vite on 127.0.0.1:5173
 node scripts/verify_strip.mjs   # headless Chrome check of the 3D view (after make web-build and make api)
 ```
 
-Both servers bind to loopback only. To view them from another machine, forward the ports over SSH (`ssh -N -L 5173:127.0.0.1:5173 -L 8765:127.0.0.1:8765 <host>`) and open `http://localhost:5173`. Deep links work and combine: `#view=wheel`, `#mode=wave`, `#chapter=<slug>`, `#cam=dive|finale`, `#decl=<id>`, `#node=<id>`. In the 3D view, keys 1, 2 and 3 fly to the camera presets, T starts the chapter tour and O toggles auto-orbit. `make compose-up` runs the keyless, read-only API container instead.
+Both servers bind to loopback only. To view them from another machine, forward the ports over SSH (`ssh -N -L 5173:127.0.0.1:5173 -L 8765:127.0.0.1:8765 <host>`) and open `http://localhost:5173`. Deep links work and combine: `#view=wheel`, `#mode=wave`, `#pop=dead|compare`, `#chapter=<slug>`, `#shot=1..5`, `#cinema`, `#decl=<id>`, `#node=<id>`. In the 3D view, keys 1 to 5 fly to the five shots, 0 returns to the overview, T plays or stops the visual tour, Escape stops it and O toggles auto-orbit. For a recording, open `#cinema` and press T. `make compose-up` runs the keyless, read-only API container instead.
 
 Backends (`EDDIE_BACKEND`):
 - `mock` (default): deterministic, $0.
 - `dgx`: an OpenAI-compatible local server, $0.
 - `ember`: paid. It additionally needs `EDDIE_ALLOW_LIVE_EMBER=true`, an anchored ledger (`budget init`, run once interactively) and a mode-600 key file. It runs only from the host CLI, never in a container and never under pytest.
+
+## First live call
+
+Nothing live exists until you run this, once, by hand, on the host. D is what Meta's dashboard shows for this key since Nov 23.
+
+1. `git status` is clean and `uv run pytest -q` is green.
+2. Store the key, never in the repo or an env file. Either run `scripts/ember-key.sh` in your own terminal: it asks for the key with hidden input and puts it in a Kubernetes Secret (by default `eddie-operator/ember-api-key`, in a namespace that runs no workloads; set `EDDIE_KEY_NAMESPACE` and `EDDIE_KEY_SECRET` to choose others), without the key touching a file or a command line; live commands then go through `scripts/ember-live.sh <cli arguments>`, which reads the Secret into the CLI's environment. Or keep a mode-600 file: `install -d -m 700 ~/.secrets/eddie`, then `(umask 077; cat > ~/.secrets/eddie/meta_api_key)`, paste, Ctrl-D.
+3. `uv run python -m eddie.cli budget init --dashboard-usd D`, and type `INIT`.
+4. `uv run python -m eddie.cli budget status`: anchor `ok`, breaker `closed`, kill switch `absent`.
+5. Rehearse at $0: `uv run python -m eddie.cli llm ping --region R1.triage --effort minimal --max-output-tokens 16` prints `backend       mock`.
+6. One live call: `scripts/ember-live.sh llm ping --region R1.triage --effort minimal --max-output-tokens 16` (with the key file instead: `EDDIE_BACKEND=ember EDDIE_ALLOW_LIVE_EMBER=true uv run python -m eddie.cli llm ping --region R1.triage --effort minimal --max-output-tokens 16`). It reserves about $0.00012 against the run and daily caps and $0.3146 (the worst case) against the lifetime gate while in flight, then settles near $0.00001. The flags must be in the process environment: nothing loads `.env`.
+7. `budget status` again: one settled call, `anomalous: 0`, breaker `closed`. If the breaker is open, stop and read the reason before any `reset-breaker`.
+8. `make dev`: the top pill reads about `$0.00001 of $8.00 cap, 1 live call`.
+9. `uv run python -m eddie.cli budget export-trace`, then compare with the dashboard once it updates. `budget trip --reason "..."` is the manual kill switch.
 
 ## Sandbox
 
@@ -109,7 +135,7 @@ Backends (`EDDIE_BACKEND`):
 - rlimits, and a wall-clock kill of the whole process group;
 - a PEP 578 audit hook that denies network, process creation, writes outside the job, and reads of secrets or ledgers under `$HOME`.
 
-Every `.wav` gets a spectrogram PNG. Every image and audio file gets $0 QC (blank or NaN plots; silent, clipped or too-short audio), so the paid critic never sees an obviously broken artifact.
+Every script gets the house plot style through `MATPLOTLIBRC` (`eddie/sandbox/eddie.matplotlibrc`, rendered from `eddie/sandbox/style.py`): white figures, ink text and the validated colour cycle, with no styling code in the script. Every `.wav` gets a spectrogram PNG. Every image and audio file gets $0 QC (blank or NaN plots; silent, clipped or too-short audio), so the paid critic never sees an obviously broken artifact.
 
 ## Layout
 

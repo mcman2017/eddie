@@ -2,7 +2,8 @@
 
 |L(1/2 + it, chi)| for the non-principal character modulo 4 (chi(n) = 0, 1, 0, -1 for
 n = 0, 1, 2, 3 mod 4). Its zeros are located by refining each sampled dip with a
-golden-section search, and kept only when |L| falls below 1e-3.
+golden-section search, and kept only when |L| falls below 1e-3. Paper, ink, grid and fonts
+come from the sandbox's default plot style.
 """
 
 import json
@@ -17,14 +18,7 @@ import matplotlib.pyplot as plt  # noqa: E402
 P = {"t_max": 30.0, "samples": 900, **globals().get("OVERRIDES", {})}
 CHI = [0, 1, 0, -1]
 
-BG, INK, INK2, MUTED, GRID = "#111a2c", "#f0efec", "#c3c2b7", "#898781", "#243049"
-SERIES_1, SERIES_2 = "#3987e5", "#d95926"
-plt.rcParams.update({
-    "figure.facecolor": BG, "axes.facecolor": BG, "savefig.facecolor": BG, "axes.edgecolor": MUTED,
-    "axes.labelcolor": INK2, "xtick.color": MUTED, "ytick.color": MUTED, "text.color": INK, "axes.grid": True,
-    "grid.color": GRID, "grid.linewidth": 0.6, "font.size": 11, "axes.titlesize": 13, "axes.titleweight": "bold",
-    "axes.spines.top": False, "axes.spines.right": False, "legend.frameon": False,
-})
+JADE, EMBER, STONE, CARD = "#099268", "#D9480F", "#6B645C", "#FFFFFF"
 
 
 def size(x: float) -> float:
@@ -49,17 +43,18 @@ for i in range(1, len(t) - 1):
     if size(x) < 1e-3:
         zeros.append(x)
 
-fig, ax = plt.subplots(figsize=(8, 4.5), dpi=160)
-ax.plot(t, mag, color=SERIES_1, lw=1.6, label="|L(1/2 + it, χ)|")
-ax.scatter(zeros, np.zeros(len(zeros)), s=28, color=SERIES_2, edgecolor=BG, linewidth=1.2, zorder=3,
-           label=f"{len(zeros)} zeros with t < {P['t_max']:g}")
+fig, ax = plt.subplots(layout="constrained")
+ax.axhline(0, color=STONE, lw=1.0)
+ax.fill_between(t, mag, 0, color=JADE, alpha=0.14, lw=0)
+ax.plot(t, mag, color=JADE, label="|L(1/2 + it, χ)|", zorder=2)
+ax.scatter(zeros, np.zeros(len(zeros)), s=52, color=EMBER, edgecolor=CARD, linewidth=1.3, zorder=3, clip_on=False,
+           label=f"zero of L ({len(zeros)} with t < {P['t_max']:g})")
 ax.set_xlim(0, P["t_max"])
 ax.set_ylim(bottom=0)
 ax.set_xlabel("t, the height on the critical line Re(s) = 1/2")
 ax.set_ylabel("|L(1/2 + it, χ)|")
-ax.set_title("A Dirichlet L-function on the critical line (χ the character mod 4)", loc="left")
-ax.legend(loc="upper left")
-fig.tight_layout()
+ax.set_title("A Dirichlet L-function on the critical line")
+fig.legend(loc="outside lower center", ncols=2, fontsize=10)
 fig.savefig("dirichlet_l.png")
 plt.close(fig)
 with open("dirichlet_l.json", "w") as fh:

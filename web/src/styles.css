@@ -1,20 +1,27 @@
-/* Eddie explorer. Tokens mirror src/theme.ts. Built for a 1920x1080 screen recording. */
+/* Eddie explorer: ink on gallery paper. Tokens mirror src/palette.json (through src/theme.ts).
+   Chrome is neutral; hue belongs to the data. Built for a 1920x1080 screen recording. */
 
 :root {
-  color-scheme: dark;
-  --ground: #0b1220;
-  --raised: #111a2c;
-  --hair: rgba(255, 255, 255, 0.1);
-  --hair-strong: rgba(255, 255, 255, 0.18);
-  --ink: #f0efec;
-  --ink-2: #c3c2b7;
-  --ink-3: #898781;
-  --live: #184f95;
-  --triaged: #3987e5;
-  --verified: #cde2fb;
-  --dead: #898781;
-  --ember: #eb6834;
-  --critical: #d03b3b;
+  color-scheme: light;
+  --ground: #faf8f4;
+  --well: #f3efe6;
+  --raised: #ffffff;
+  --hair: #e2ddd3;
+  --hair-strong: #cfc8ba;
+  --ink: #18181b;
+  --ink-2: #44403c;
+  --ink-3: #6b645c;
+  --act-foundations: #1d3fbf;
+  --act-machinery: #099268;
+  --act-bottleneck: #d946ef;
+  --act-main: #d9480f;
+  --ember: #d9480f;
+  --critical: #c81e1e;
+  --gold: #ffc531;
+  --crimson: #b3122d;
+  --chalk: #d9d5cc;
+  --dead: #8a8f98;
+  --hover: rgba(24, 24, 27, 0.06);
   --sans: system-ui, -apple-system, "Segoe UI", sans-serif;
   --code: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace;
 }
@@ -43,7 +50,7 @@ button {
 }
 
 :focus-visible {
-  outline: 2px solid var(--verified);
+  outline: 2px solid var(--ink);
   outline-offset: 2px;
 }
 
@@ -63,7 +70,7 @@ pre {
 .topbar {
   display: flex;
   align-items: center;
-  gap: 26px;
+  gap: 22px;
   padding: 0 28px;
   border-bottom: 1px solid var(--hair);
   white-space: nowrap;
@@ -107,7 +114,7 @@ pre {
   margin: 0 0 0 auto;
   padding: 0;
   list-style: none;
-  font-size: 14.5px;
+  font-size: 14px;
   color: var(--ink-3);
 }
 
@@ -132,7 +139,7 @@ pre {
 .region-active .region-dot {
   border-color: var(--ember);
   background: var(--ember);
-  box-shadow: 0 0 10px 2px rgba(235, 104, 52, 0.75);
+  box-shadow: 0 0 0 4px rgba(217, 72, 15, 0.2);
 }
 
 .arrow {
@@ -143,6 +150,7 @@ pre {
 
 .spend {
   display: flex;
+  background: var(--raised);
   align-items: baseline;
   gap: 8px;
   padding: 7px 16px;
@@ -168,7 +176,7 @@ pre {
 
 .spend-live {
   border-color: var(--ember);
-  box-shadow: 0 0 14px rgba(235, 104, 52, 0.35);
+  box-shadow: 0 0 0 4px rgba(217, 72, 15, 0.16);
 }
 
 .spend-danger {
@@ -176,7 +184,7 @@ pre {
 }
 
 .spend-danger .spend-note {
-  color: #f08a8a;
+  color: var(--critical);
 }
 
 /* --- stage -------------------------------------------------------------------------------- */
@@ -214,7 +222,7 @@ pre {
   border: 1px solid var(--hair-strong);
   border-radius: 8px;
   overflow: hidden;
-  background: rgba(11, 18, 32, 0.9);
+  background: var(--raised);
 }
 
 .view-tabs button {
@@ -323,7 +331,7 @@ pre {
   padding: 10px 14px;
   border-radius: 8px;
   border: 1px solid var(--hair-strong);
-  background: rgba(11, 18, 32, 0.88);
+  background: var(--raised);
   color: var(--ink);
   font: 15px var(--sans);
 }
@@ -358,7 +366,7 @@ pre {
 
 .search-hits li[aria-selected="true"] button,
 .search-hits button:hover {
-  background: rgba(57, 135, 229, 0.18);
+  background: var(--hover);
 }
 
 .hit-kind {
@@ -386,8 +394,8 @@ pre {
   gap: 4px;
   padding: 10px 14px;
   border-radius: 10px;
-  background: rgba(11, 18, 32, 0.86);
-  border: 1px solid var(--hair);
+  background: rgba(255, 255, 255, 0.94);
+  border: 1px solid var(--hair-strong);
   font-size: 15px;
 }
 
@@ -432,8 +440,9 @@ pre {
   margin: 0;
   padding: 10px 16px;
   border-radius: 8px;
-  background: rgba(208, 59, 59, 0.16);
-  border: 1px solid rgba(208, 59, 59, 0.5);
+  background: #fbeaea;
+  border: 1px solid var(--critical);
+  color: var(--ink);
 }
 
 .tooltip {
@@ -444,7 +453,8 @@ pre {
   max-width: 340px;
   padding: 10px 12px;
   border-radius: 8px;
-  background: rgba(17, 26, 44, 0.96);
+  background: var(--raised);
+  box-shadow: 0 6px 24px rgba(24, 24, 27, 0.12);
   border: 1px solid var(--hair-strong);
   font-size: 14px;
   color: var(--ink-2);
@@ -487,7 +497,7 @@ pre {
 .side-tabs button[aria-selected="true"] {
   color: var(--ink);
   font-weight: 650;
-  border-bottom-color: var(--verified);
+  border-bottom-color: var(--ink);
 }
 
 .side-body,
@@ -529,7 +539,7 @@ pre {
 }
 
 .chip-verified {
-  border-color: rgba(205, 226, 251, 0.55);
+  border-color: var(--ink);
 }
 
 .decl-name {
@@ -547,7 +557,8 @@ pre {
 }
 
 .root-flag {
-  color: var(--verified);
+  color: var(--ink);
+  font-weight: 600;
 }
 
 .insp-section {
@@ -575,7 +586,10 @@ pre {
 
 .prose code {
   font-size: 0.92em;
-  color: var(--verified);
+  padding: 1px 4px;
+  border-radius: 4px;
+  background: var(--well);
+  color: var(--ink);
 }
 
 .seed-note {
@@ -593,7 +607,7 @@ pre {
   margin: 0;
   padding: 12px 14px;
   border-radius: 6px;
-  background: rgba(0, 0, 0, 0.28);
+  background: var(--well);
   border: 1px solid var(--hair);
   font-size: 14px;
   line-height: 1.6;
@@ -623,8 +637,9 @@ pre {
   padding: 0;
   border: 0;
   background: none;
-  color: var(--triaged);
+  color: var(--ink);
   text-decoration: underline;
+  text-decoration-color: var(--ink-3);
   text-underline-offset: 3px;
   cursor: pointer;
   text-align: left;
@@ -680,17 +695,17 @@ pre {
 }
 
 .neighbors button:hover {
-  background: rgba(57, 135, 229, 0.14);
+  background: var(--hover);
 }
 
 .neighbors button.is-dead .code {
   color: var(--ink-3);
   text-decoration: line-through;
-  text-decoration-color: rgba(137, 135, 129, 0.6);
+  text-decoration-color: rgba(107, 100, 92, 0.6);
 }
 
 .note-error {
-  color: #f08a8a;
+  color: var(--critical);
 }
 
 /* --- witnesses ---------------------------------------------------------------------------- */
@@ -726,10 +741,43 @@ pre {
   font-weight: 600;
 }
 
-.witness-grid {
+/* a rejected render and the one that replaced it, read top to bottom as before and after */
+.witness-pair {
   display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 10px;
+  gap: 14px;
+}
+
+.figure-frame {
+  display: grid;
+}
+
+/* a verdict heads its image as a band, with an icon and a word: status never rides on colour alone */
+.verdict {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 6px 12px 6px 10px;
+  border-radius: 6px 6px 0 0;
+  font-size: 13.5px;
+  font-weight: 600;
+  line-height: 1.35;
+  color: var(--raised);
+}
+
+.verdict .status-mark {
+  flex: none;
+}
+
+.verdict-rejected {
+  background: var(--critical);
+}
+
+.verdict-verified {
+  background: var(--ink);
+}
+
+.verdict + img {
+  border-radius: 0 0 6px 6px;
 }
 
 .figure {
@@ -746,7 +794,13 @@ pre {
 }
 
 .figure-rejected img {
-  border-color: rgba(208, 59, 59, 0.7);
+  border: 2px solid var(--critical);
+  border-top: 0;
+}
+
+.figure-verified img {
+  border: 2px solid var(--ink);
+  border-top: 0;
 }
 
 .figure figcaption {
@@ -767,7 +821,7 @@ pre {
   margin-top: 10px;
   padding: 10px 14px;
   border-left: 3px solid var(--critical);
-  background: rgba(208, 59, 59, 0.08);
+  background: #fbeaea;
 }
 
 .defects-title {
@@ -788,7 +842,9 @@ pre {
 
 .script summary {
   cursor: pointer;
-  color: var(--triaged);
+  color: var(--ink-2);
+  text-decoration: underline dotted;
+  text-underline-offset: 3px;
 }
 
 .script pre {
@@ -796,7 +852,7 @@ pre {
   overflow: auto;
   padding: 10px 12px;
   border-radius: 6px;
-  background: rgba(0, 0, 0, 0.28);
+  background: var(--well);
   border: 1px solid var(--hair);
   font-size: 13px;
   line-height: 1.55;
@@ -814,8 +870,8 @@ pre {
   padding: 8px 16px;
   border: 0;
   border-radius: 999px;
-  background: var(--verified);
-  color: var(--ground);
+  background: var(--ink);
+  color: var(--raised);
   font-weight: 700;
   cursor: pointer;
 }
@@ -846,7 +902,7 @@ pre {
   border-radius: 6px;
   overflow: hidden;
   border: 1px solid var(--hair);
-  background: rgba(0, 0, 0, 0.3);
+  background: var(--well);
 }
 
 .waveform {
@@ -875,7 +931,7 @@ pre {
   left: 6px;
   font-size: 12px;
   color: var(--ink);
-  text-shadow: 0 0 4px #000;
+  text-shadow: 0 0 3px #fff, 0 0 3px #fff;
 }
 
 .axis-top {
@@ -894,7 +950,7 @@ pre {
   width: 2px;
   margin-left: -1px;
   background: var(--ink);
-  box-shadow: 0 0 8px rgba(240, 239, 236, 0.8);
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.85);
   pointer-events: none;
 }
 
@@ -1013,29 +1069,45 @@ pre {
 }
 
 .guide-steps button:not(:disabled):hover {
-  background: rgba(57, 135, 229, 0.18);
+  background: var(--hover);
 }
 
 .guide-tier {
+  display: flex;
+  align-items: center;
+  gap: 8px;
   margin: 16px 0 0;
   font-size: 15px;
   font-weight: 600;
+  color: var(--ink-2);
+}
+
+/* an act is named in ink; the chip beside it carries the colour */
+.act-chip,
+.guide-tier::before {
+  content: "";
+  flex: none;
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--act, var(--ink-3));
 }
 
 .tier-foundations {
-  color: #6aa5ec;
+  --act: var(--act-foundations);
 }
 
 .tier-machinery {
-  color: #86b6ef;
+  --act: var(--act-machinery);
 }
 
 .tier-bottleneck {
-  color: #a9cbf4;
+  --act: var(--act-bottleneck);
 }
 
 .tier-main {
-  color: var(--verified);
+  --act: var(--act-main);
 }
 
 .guide h1 {
@@ -1064,8 +1136,8 @@ pre {
 
 .source-badge {
   border-style: solid;
-  border-color: rgba(205, 226, 251, 0.55);
-  color: var(--verified);
+  border-color: var(--ink);
+  color: var(--ink);
 }
 
 .guide .prose {
@@ -1094,7 +1166,8 @@ pre {
   margin-top: 26px;
   padding: 4px 10px;
   border-radius: 6px;
-  background: rgba(205, 226, 251, 0.14);
+  background: var(--well);
+  border: 1px solid var(--hair);
   font-size: 14px;
   white-space: nowrap;
 }
@@ -1129,7 +1202,7 @@ pre {
 .guide-flowlist button:hover,
 .contents button:hover,
 .theorem-name:hover {
-  background: rgba(57, 135, 229, 0.14);
+  background: var(--hover);
 }
 
 .guide-flowlist b,
@@ -1196,4 +1269,74 @@ pre {
 
 .contents-title {
   font-weight: 550;
+}
+
+/* --- capture layout (#cinema) ---------------------------------------------------------------
+   The view takes the whole stage. The right panel is a drawer over it, so opening a chapter
+   never resizes the canvas and the framing of a take does not jump. */
+
+.app-cinema .stage {
+  position: relative;
+  grid-template-columns: minmax(0, 1fr);
+  overflow: hidden;
+}
+
+.app-cinema .side {
+  position: absolute;
+  z-index: 5;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: 600px;
+  transform: translateX(100%);
+  visibility: hidden;
+  transition: transform 0.55s cubic-bezier(0.3, 0, 0.2, 1), visibility 0s 0.55s;
+  box-shadow: -14px 0 44px rgba(24, 24, 27, 0.14);
+}
+
+.app-cinema.drawer-open .side {
+  transform: none;
+  visibility: visible;
+  transition: transform 0.55s cubic-bezier(0.3, 0, 0.2, 1), visibility 0s;
+}
+
+.app-cinema .view-tabs,
+.app-cinema .search,
+.app-cinema .crumbs,
+.app-cinema .map-hint {
+  display: none;
+}
+
+/* --- plain-English labels ------------------------------------------------------------------- */
+
+.region-name {
+  display: grid;
+  line-height: 1.2;
+}
+
+.region-name small {
+  font-size: 11.5px;
+  font-weight: 400;
+  color: var(--ink-3);
+}
+
+.contents-act {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+}
+
+/* a refused state carries an icon and a word, not only a colour */
+.spend-alert {
+  display: inline-grid;
+  place-items: center;
+  width: 15px;
+  height: 15px;
+  margin-right: 5px;
+  border-radius: 50%;
+  background: var(--critical);
+  color: var(--raised);
+  font-size: 11px;
+  font-weight: 700;
+  vertical-align: 1px;
 }

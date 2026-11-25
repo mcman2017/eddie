@@ -41,7 +41,7 @@ class DgxAdapter:
 
     def __init__(self, settings: Settings, *, transport: httpx.AsyncBaseTransport | None = None) -> None:
         if not settings.dgx_text_base_url:
-            raise ConfigError("dgx backend needs DGX_TEXT_BASE_URL (e.g. the llm-gateway /v1 endpoint)")
+            raise ConfigError("dgx backend needs DGX_TEXT_BASE_URL (an OpenAI-compatible /v1 endpoint)")
         self.text_base = settings.dgx_text_base_url.rstrip("/")
         self.vision_base = (settings.dgx_vision_base_url or settings.dgx_text_base_url).rstrip("/")
         _refuse_paid_hosts(self.text_base)

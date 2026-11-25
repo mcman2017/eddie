@@ -243,7 +243,7 @@ class Ledger:
         self.billable = billable
         if not create and not self.path.exists():
             raise LedgerIntegrityError(
-                f"no canonical ledger at {self.path}: run `python -m eddie.cli budget init` once"
+                f"no canonical ledger at {self.path}: run `uv run python -m eddie.cli budget init` once"
             )
         created_dir = not self.path.parent.exists()
         self.path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -717,7 +717,7 @@ class Ledger:
         anchor = Anchor.read(anchor_path)
         if anchor is None:
             raise LedgerIntegrityError(
-                f"no ledger anchor at {anchor_path}: run `python -m eddie.cli budget init` once"
+                f"no ledger anchor at {anchor_path}: run `uv run python -m eddie.cli budget init` once"
             )
         st = os.stat(self.path)
         problems = []

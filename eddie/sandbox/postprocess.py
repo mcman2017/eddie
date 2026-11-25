@@ -18,6 +18,12 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
 import numpy as np  # noqa: E402
 from matplotlib import image as mpimg  # noqa: E402
+from matplotlib.colors import LinearSegmentedColormap  # noqa: E402
+
+# The page's spectrogram ramp: silence is paper white, the loudest is deep indigo. This file runs
+# as a standalone script inside the sandbox, so the stops are repeated here rather than imported;
+# tests/test_palette_parity.py holds them equal to eddie/sandbox/style.py RAMP_SPECTROGRAM.
+SPECTROGRAM_RAMP = ["#FFFFFF", "#FDE9B8", "#F9B45C", "#EE6A4D", "#C2267A", "#5B21A6", "#1E1B6E"]
 
 INTERNAL = {"main.py", "qc.json", ".sandbox_violations"}
 SKIP_DIRS = {"tmp", ".mpl", "__pycache__"}
@@ -69,8 +75,9 @@ def analyze_wav(path: str) -> dict:
         mag = np.abs(np.fft.rfft(frames_ * window, axis=1)).T
         db = 20 * np.log10(mag + 1e-9)
         fig, ax = plt.subplots(figsize=(8, 3), dpi=100)
-        ax.imshow(db, origin="lower", aspect="auto", cmap="magma",
+        ax.imshow(db, origin="lower", aspect="auto", cmap=LinearSegmentedColormap.from_list("eddie_spectrogram", SPECTROGRAM_RAMP),
                   extent=[0, len(x) / rate, 0, rate / 2], vmin=db.max() - 90, vmax=db.max())
+        ax.grid(False)
         ax.set_xlabel("time (s)")
         ax.set_ylabel("frequency (Hz)")
         ax.set_title(os.path.basename(path))

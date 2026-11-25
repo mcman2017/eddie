@@ -3,7 +3,7 @@ import { api, type ChapterDetail, type ChapterSummary, type ChapterTheorem, type
 import { AudioWitness } from "./AudioWitness";
 import { Prose } from "./Prose";
 import { StatusMark } from "./StatusMark";
-import { TIER_LABEL } from "./theme";
+import { actName } from "./theme";
 import { WitnessViewer } from "./WitnessViewer";
 
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
@@ -22,7 +22,7 @@ function synopsis(markdown: string, badge: string | null): string {
   const kept = [];
   for (const b of blocks) {
     if (badge && b === badge) continue;
-    if (/^\*\*(Builds on|Feeds|Final theorems|Bottleneck theorems|Companion remark)/.test(b) || b.startsWith("The R4 consolidator")) break;
+    if (/^\*\*(Builds on|Feeds|Final theorems|Chokepoints|Bottleneck theorems|Authors' summary PDF|Companion remark)/.test(b) || b.startsWith("The R4 consolidator")) break;
     kept.push(b);
   }
   return kept.join("\n\n");
@@ -82,7 +82,7 @@ export function ChapterGuide({ slug, chapters, onChapter, onSelectDecl }: Props)
             </button>
           </span>
         </div>
-        <p className={`guide-tier tier-${d.tier}`}>{TIER_LABEL[d.tier]}</p>
+        <p className={`guide-tier tier-${d.tier}`}>{actName(d.tier, true)}</p>
         <h1>{short(d.title)}</h1>
         {d.title !== short(d.title) && <p className="guide-path">{d.title}</p>}
         {d.badge ? (
@@ -129,14 +129,14 @@ export function ChapterGuide({ slug, chapters, onChapter, onSelectDecl }: Props)
 
       {d.bottlenecks.length > 0 && (
         <section className="insp-section">
-          <h2>Bottleneck theorems</h2>
-          <p className="guide-note">Every path from Main to the stated share of the live proof passes through each of these.</p>
+          <h2>Chokepoints</h2>
+          <p className="guide-note">Every route from the final theorem to the stated share of the live proof runs through each of these.</p>
           <TheoremList items={d.bottlenecks} onSelectDecl={onSelectDecl} total={d.live_total} gates />
         </section>
       )}
 
       <section className="insp-section">
-        <h2>Witnesses</h2>
+        <h2>See it and hear it</h2>
         {visuals.length > 0 && <WitnessViewer witnesses={visuals} reviews={d.reviews} />}
         {audio.map((a) => (
           <AudioWitness key={a.id} audio={a}
@@ -144,7 +144,7 @@ export function ChapterGuide({ slug, chapters, onChapter, onSelectDecl }: Props)
         ))}
         {d.witnesses.length === 0 && (
           <p className="muted">
-            No witness has been rendered for this chapter yet.{" "}
+            Nothing has been drawn or sounded for this chapter yet.{" "}
             {d.planned
               ? `The budget plan schedules ${d.planned.milestones} of its milestones from ${day(d.planned.first_day)} (R1 translation, R2 critique, R3 arbitration), then one R4 consolidation on ${day(d.planned.consolidation_day)}.`
               : "It is outside the current Ember budget plan."}
@@ -154,7 +154,7 @@ export function ChapterGuide({ slug, chapters, onChapter, onSelectDecl }: Props)
 
       {d.remark_steps.length > 0 && (
         <p className="guide-note">
-          Companion remark, by keyword match: {d.remark_steps.map((s) => `step ${s.number}, ${s.phrase}`).join("; ")}.
+          Matches the authors' summary PDF by keyword: {d.remark_steps.map((s) => `step ${s.number}, ${s.phrase}`).join("; ")}.
         </p>
       )}
     </article>
@@ -217,14 +217,22 @@ function Contents({ chapters, onChapter }: { chapters: ChapterSummary[]; onChapt
           {chapters.length} chapters in the order the proof is built, from the foundations to Main. Select a chapter here or a
           beacon on the strip.
         </p>
-        {stubs > 0 && <p className="stub-badge">{stubs} of {chapters.length} chapters are $0 structural stubs, not model output</p>}
+        {stubs > 0 && (
+          <p className="stub-badge">
+            {stubs === chapters.length ? `All ${stubs}` : `${stubs} of ${chapters.length}`} chapters are drafts built from structure alone ($0). No
+            model has written them yet.
+          </p>
+        )}
       </header>
       {TIERS.map((tier) => {
         const rows = chapters.filter((c) => c.tier === tier);
         if (!rows.length) return null;
         return (
           <section key={tier} className="insp-section">
-            <h2>{TIER_LABEL[tier]}</h2>
+            <h2 className={`contents-act tier-${tier}`}>
+              <i className="act-chip" />
+              {actName(tier, true)}
+            </h2>
             <ol className="contents">
               {rows.map((c) => (
                 <li key={c.slug}>

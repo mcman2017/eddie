@@ -4,10 +4,14 @@ from __future__ import annotations
 
 import gzip
 import json
+import re
 import sqlite3
 import wave
 
+import mpmath
+import numpy as np
 import pytest
+from matplotlib import image as mpimg
 
 from eddie.demo.seed import SEED_PREFIX, SeedParams, Target, pick_targets, seed_demo
 from eddie.ingest.build import build_index
@@ -97,6 +101,43 @@ def test_seed_artifacts_are_real_media(cone, tmp_path):
     for w in report["witnesses"]:
         if w["ext"] == "png":
             assert (store / f"{w['sha256']}.png").read_bytes()[:8] == b"\x89PNG\r\n\x1a\n"
+
+
+def test_seed_plots_are_drawn_for_the_light_page_and_the_flaw_is_measured(cone, tmp_path):
+    report = run(cone, tmp_path)
+    store = tmp_path / "artifacts"
+
+    def pixels(w):
+        return mpimg.imread(store / f"{w['sha256']}.png")[..., :3]
+
+    plots = [w for w in report["witnesses"] if w["kind"] == "plot"]
+    assert sorted(w["status"] for w in plots) == ["rejected", "verified", "verified", "verified"]
+    for w in plots:  # the flawed render too: its defects are in the drawing, not in the paper
+        img = pixels(w)
+        border = np.concatenate([img[0], img[-1], img[:, 0], img[:, -1]])
+        assert border.min() == 1.0, (w["decl"], w["status"])  # white card to every edge
+        assert img.min() < 0.6  # and something is drawn on it
+
+    # the spectrogram is full-bleed: silence is paper, each tone a dark line
+    spectrogram = pixels(next(w for w in report["witnesses"] if w["kind"] == "spectrogram")).mean(axis=-1)
+    rows = spectrogram.shape[0]
+    assert spectrogram[: rows // 4].min() > 0.97  # above the highest tone nothing sounds
+    assert np.median(spectrogram) > 0.95 and spectrogram.min() < 0.35
+
+    # the clipped fraction the UI reports is the one a fresh evaluation of Z(t) gives
+    p = SeedParams.quick()
+    z = np.array([float(mpmath.siegelz(t)) for t in np.linspace(0.0, p.hardy_t_max, p.hardy_samples)])
+    expected = float(np.mean(np.abs(z) > 1.0))
+    assert 0.05 < expected < 0.95
+    with connect_ro(tmp_path / "state" / "art.sqlite") as con:
+        defects = json.loads(con.execute("SELECT defects FROM witnesses WHERE status = 'rejected'").fetchone()[0])
+        python_source = con.execute("SELECT python_source FROM witnesses WHERE status = 'rejected'").fetchone()[0]
+    measured = [d for d in defects if d.endswith("(measured)")]
+    assert len(measured) == 1 and len([d for d in defects if d.endswith("(planted)")]) == 2
+    percent = int(re.search(r"(\d+)% of the curve is cut off", measured[0]).group(1))
+    assert abs(percent - 100 * expected) <= 0.51
+    # the flawed render carries no painted warning: the verdict is the UI's job
+    assert "#C81E1E" not in python_source and "rcParams" not in python_source
 
 
 def test_seed_writes_one_stub_per_chapter_and_never_overwrites_real_text(cone, tmp_path):

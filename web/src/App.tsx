@@ -3,7 +3,7 @@ import { api, type ChapterSummary, type Overview } from "./api";
 import { ChapterGuide } from "./ChapterGuide";
 import { Inspector } from "./Inspector";
 import { ProofMap } from "./ProofMap";
-import { routeNumber, routeText, writeRoute } from "./route";
+import { routeFlag, routeNumber, routeText, writeRoute } from "./route";
 import { TopBar } from "./TopBar";
 
 const StripView = lazy(() => import("./strip/StripView"));
@@ -15,6 +15,10 @@ type Panel = "guide" | "inspector";
  * Two views of one proof share the stage: the 3D critical strip (the default) and the
  * dependency wheel. The right panel is either the chapter guide or the declaration inspector.
  * Deep links are documented in route.ts.
+ *
+ * With #cinema the stage is laid out for capture: the top bar and the view fill the frame, and
+ * the right panel is a drawer that stays away until a chapter is opened (by a beacon, or by the
+ * visual tour when it reaches the summit).
  */
 export function App() {
   const [overview, setOverview] = useState<Overview | null>(null);
@@ -27,6 +31,14 @@ export function App() {
   const [selected, setSelected] = useState<number | null>(null);
   const [reveal, setReveal] = useState<{ declId: number; nonce: number; instant?: boolean } | null>(null);
   const [initialNode, setInitialNode] = useState<number | null>(null);
+  const [cinema, setCinema] = useState(() => routeFlag("cinema"));
+  const [drawer, setDrawer] = useState(() => !!routeText("chapter"));
+
+  useEffect(() => {
+    const onHash = () => setCinema(routeFlag("cinema"));
+    window.addEventListener("hashchange", onHash);
+    return () => window.removeEventListener("hashchange", onHash);
+  }, []);
 
   useEffect(() => {
     api
@@ -64,12 +76,22 @@ export function App() {
   const openChapter = useCallback((slug: string | null) => {
     setChapter(slug);
     setPanel("guide");
+    setDrawer(slug != null);
     writeRoute({ chapter: slug });
+  }, []);
+
+  // a take starts with the drawer away; it comes back when the tour opens the last chapter
+  const onTouring = useCallback((running: boolean) => {
+    if (running) setDrawer(false);
   }, []);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const el = e.target as HTMLElement | null;
+      if (e.key === "Escape" && cinema && drawer) {
+        setDrawer(false);
+        return;
+      }
       if (panel !== "guide" || !chapter || e.metaKey || e.ctrlKey || e.altKey) return;
       if (el && /^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName)) return;
       const here = chapters.find((c) => c.slug === chapter);
@@ -81,10 +103,10 @@ export function App() {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [panel, chapter, chapters, openChapter]);
+  }, [panel, chapter, chapters, openChapter, cinema, drawer]);
 
   return (
-    <div className="app">
+    <div className={`app${cinema ? " app-cinema" : ""}${cinema && drawer ? " drawer-open" : ""}`}>
       <TopBar overview={overview} />
       <main className="stage">
         <div className="views">
@@ -99,7 +121,7 @@ export function App() {
           <div className={`view ${view === "strip" ? "" : "view-off"}`} inert={view !== "strip"}>
             {visited.strip && (
               <Suspense fallback={<section className="map map-empty"><p>Loading the 3D view…</p></section>}>
-                <StripView active={view === "strip"} chapter={chapter} onChapter={openChapter} />
+                <StripView active={view === "strip"} chapter={chapter} onChapter={openChapter} cinema={cinema} onTouring={onTouring} />
               </Suspense>
             )}
           </div>
@@ -120,7 +142,7 @@ export function App() {
               ))}
           </div>
         </div>
-        <aside className="side" aria-label={panel === "guide" ? "Chapter guide" : "Theorem inspector"}>
+        <aside className="side" aria-label={panel === "guide" ? "Chapter guide" : "Theorem inspector"} inert={cinema && !drawer}>
           <div className="side-tabs" role="tablist" aria-label="Panel">
             <button type="button" role="tab" aria-selected={panel === "guide"} onClick={() => setPanel("guide")}>
               Chapter guide

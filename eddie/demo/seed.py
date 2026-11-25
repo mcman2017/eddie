@@ -69,7 +69,7 @@ def _roots(cone_path: Path, index_path: Path) -> list[Target]:
 def pick_targets(roots: list[Target]) -> dict[str, Target]:
     """Main theorem for the zeta witnesses, then the zeta-zeros and Dirichlet-zeros statements."""
     if not roots:
-        raise ValueError("the cone has no root theorems: run `python -m eddie.cli cone build` first")
+        raise ValueError("the cone has no root theorems: run `uv run python -m eddie.cli cone build` first")
     used: set[int] = set()
 
     def take(pred: Callable[[Target], bool]) -> Target:
@@ -109,19 +109,23 @@ INTUITIONS = {
         "The Riemann Hypothesis: every nontrivial zero of the zeta function ζ(s) lies on the critical line, "
         "where the real part of s is exactly 1/2.\n\n"
         "The witnesses make that concrete. On the critical line Hardy's function Z(t) is real, so each zero "
-        "shows up as a sign change. Played as sound, each zero becomes a tone whose pitch is its height on "
-        "the line, weighted by 1/|ρ| as in Riemann's explicit formula for the primes."
+        "shows up as a sign change: the plot tints the curve green above zero and magenta below, and marks "
+        "every flip. Played as sound, each zero becomes a tone whose pitch is its height on the line, "
+        "weighted by 1/|ρ| as in Riemann's explicit formula for the primes. In the spectrogram each tone "
+        "is a dark line on white, and a new line starts as each zero joins."
     ),
     "strip": (
         "In plain terms: the zeros of ζ(s) inside the critical strip all sit on the line Re(s) = 1/2. The "
         "precise hypotheses are in the formal statement below.\n\n"
-        "The heatmap lights up wherever |ζ(s)| gets close to zero; in this window every bright spot lies on the "
-        "dashed line."
+        "The map is the 3D strip seen from above, in the same colours: a deep blue well is a place where "
+        "|ζ(s)| drops to zero. In this window every well is ringed, and every ring sits on the gold line "
+        "Re(s) = 1/2."
     ),
     "lfun": (
         "The same claim for Dirichlet L-functions L(s, χ): their nontrivial zeros lie on Re(s) = 1/2. The "
         "precise hypotheses are in the formal statement below.\n\n"
-        "The plot follows |L(1/2 + it, χ)| for the character modulo 4 and marks each place it vanishes."
+        "The plot follows the size of L(1/2 + it, χ) for the character modulo 4 up the critical line. The "
+        "green curve touches zero at each orange dot, and each dot is a zero of L."
     ),
 }
 
@@ -204,7 +208,7 @@ def seed_demo(
                      reasons=[f"SEED review: full y-range, labeled axes, {len(hmeta['zeros'])} zeros marked"])
 
     witness(strip, results["strip"], "critical_strip.png", kind="plot", status="verified",
-            title="The critical strip, lit by −log|ζ|", script=scripts["strip"])
+            title="The critical strip from above, coloured by the size of ζ", script=scripts["strip"])
     lmeta = _json_artifact(results["lfun"], "dirichlet_l.json")
     witness(lfun, results["lfun"], "dirichlet_l.png", kind="plot", status="verified",
             title=f"|L(1/2 + it, χ mod 4)| with {len(lmeta['zeros'])} zeros", script=scripts["lfun"])

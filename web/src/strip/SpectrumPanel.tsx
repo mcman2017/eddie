@@ -1,18 +1,18 @@
 import { useEffect, useRef, useState, type PointerEvent } from "react";
-import { COLORS, STATUS_FILL } from "../theme";
+import { COLORS } from "../theme";
 import type { Landscape } from "./landscape";
 
 const STATUS_NOTE: Record<string, string> = {
   exact: "Exact",
-  stable: "Holds across encodings",
+  stable: "Holds however we number it",
   "encoding-specific": "This numbering only",
   null: "Checked, nothing there",
 };
 
 /**
  * Findings, and the power spectrum |F(ω)|² of the live and dead declarations on one log axis.
- * Two series: live is a solid line in the live-stain blue, dead a dashed grey line (its shape,
- * not only its colour, tells it apart); both are labelled directly and listed in the legend.
+ * Two series: live is a solid ink line, dead a dashed slate line (its shape, not only its
+ * colour, tells it apart); both are listed in the legend.
  */
 export function SpectrumPanel({ land, onFly }: { land: Landscape; onFly: (sigma: number, t: number) => void }) {
   const ref = useRef<HTMLCanvasElement>(null);
@@ -48,7 +48,7 @@ export function SpectrumPanel({ land, onFly }: { land: Landscape; onFly: (sigma:
     g.clearRect(0, 0, W, H);
     g.font = "12px system-ui, sans-serif";
     g.fillStyle = COLORS.ink3;
-    g.strokeStyle = "rgba(255, 255, 255, 0.08)";
+    g.strokeStyle = COLORS.line;
     g.lineWidth = 1;
     for (let p = Math.ceil(Math.log10(lo)); p <= Math.floor(Math.log10(hi)); p++) {
       const y = Math.round(yOf(10 ** p)) + 0.5;
@@ -77,8 +77,8 @@ export function SpectrumPanel({ land, onFly }: { land: Landscape; onFly: (sigma:
       g.stroke();
       g.setLineDash([]);
     };
-    draw(dead, STATUS_FILL.dead, [5, 4], 1.5);
-    draw(live, STATUS_FILL.triaged, [], 2);
+    draw(dead, COLORS.slate, [5, 4], 1.5);
+    draw(live, COLORS.ink, [], 2);
   }, [land]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const onMove = (e: PointerEvent<HTMLCanvasElement>) => {
@@ -91,8 +91,13 @@ export function SpectrumPanel({ land, onFly }: { land: Landscape; onFly: (sigma:
 
   const stats = land.meta.proof;
   return (
-    <div className="strip-card" role="region" aria-label="Findings and spectrum">
-      <h2>What the numbers say</h2>
+    <div className="strip-card" role="region" aria-label="What we found">
+      <h2>What we found</h2>
+      {land.meta.takeaway && (
+        <p className="takeaway" data-testid="takeaway">
+          {land.meta.takeaway}
+        </p>
+      )}
       <ul className="findings">
         {land.meta.findings.map((f) => (
           <li key={f.id}>
@@ -110,7 +115,8 @@ export function SpectrumPanel({ land, onFly }: { land: Landscape; onFly: (sigma:
           </li>
         ))}
       </ul>
-      <h2>Power spectrum |F(ω)|², live and dead declarations</h2>
+      <h2>How much of each rhythm the two waves contain</h2>
+      <p className="spectrum-note">Power spectrum |F(ω)|² against frequency ω, on a log scale.</p>
       <div className="spectrum">
         <canvas ref={ref} style={{ width: W, height: H }} onPointerMove={onMove} onPointerLeave={() => setHover(null)}
           aria-label="Power spectrum of the live and dead declarations against ω, log scale" />
@@ -124,11 +130,11 @@ export function SpectrumPanel({ land, onFly }: { land: Landscape; onFly: (sigma:
         )}
       </div>
       <p className="spectrum-legend">
-        <span><i className="swatch swatch-live" /> Live, {stats.live.stats.n1?.toLocaleString(undefined, { maximumFractionDigits: 0 })} effective classes</span>
-        <span><i className="swatch swatch-dead" /> Dead, {stats.dead.stats.n1?.toLocaleString(undefined, { maximumFractionDigits: 0 })} effective classes</span>
+        <span><i className="swatch swatch-live" /> Live proof, {stats.live.stats.n1?.toLocaleString(undefined, { maximumFractionDigits: 0 })} effective kinds</span>
+        <span><i className="swatch swatch-dead" /> Dead code, {stats.dead.stats.n1?.toLocaleString(undefined, { maximumFractionDigits: 0 })}</span>
       </p>
       <p className="spectrum-note">
-        Peaks are recurrences of the prime coding and move with it. What does not move is the floor: fewer effective classes, a
+        The peaks come from how the proof is numbered and move with it. What stays is the floor: fewer kinds of declaration, a
         higher floor.
       </p>
     </div>

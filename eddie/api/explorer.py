@@ -51,13 +51,13 @@ class ExplorerData:
     @contextmanager
     def cone_con(self) -> Iterator[sqlite3.Connection]:
         if not self.cone.exists() or not self.index.exists():
-            raise HTTPException(503, "cone not built: run `python -m eddie.cli cone build`")
+            raise HTTPException(503, "cone not built: run `uv run python -m eddie.cli cone build`")
         con = sqlite3.connect(f"file:{self.cone}?mode=ro", uri=True)
         try:
             con.row_factory = sqlite3.Row
             version = con.execute("SELECT value FROM cone_meta WHERE key = 'cone_version'").fetchone()
             if version is None or version[0] != CONE_VERSION:
-                raise HTTPException(503, "cone was built by an older version: run `python -m eddie.cli cone build` again")
+                raise HTTPException(503, "cone was built by an older version: run `uv run python -m eddie.cli cone build` again")
             con.execute("ATTACH ? AS idx", (f"file:{self.index}?mode=ro",))
             if self.artifacts_db.exists():
                 con.execute("ATTACH ? AS art", (f"file:{self.artifacts_db}?mode=ro",))

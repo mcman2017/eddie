@@ -285,6 +285,44 @@ def test_build_writes_a_consistent_asset(built):
     assert rows[0].startswith("ln_n\tgodel_n") and len(rows) - 1 == land["proof"]["classes"]
 
 
+def _pops(live_n1, dead_n1):
+    return {"live": {"stats": {"present": True, "n1": live_n1}}, "dead": {"stats": {"present": True, "n1": dead_n1}}}
+
+
+def test_takeaway_says_only_what_the_numbers_support():
+    data = {"live_total": 799_028, "dead_total": 266_458}
+    gate = {"full_name": "allChi", "share": 84.5544}
+    stable = [{"id": "live-vs-dead", "status": "stable"}]
+    full = zl.takeaway(data, _pops(2971.0, 1415.0), stable, gate)
+    assert full == ("One in four declarations (266K, grey) is never used by the final theorem; the 799K that are (colour) "
+                    "make the richer wave, and a single theorem gates 84.6% of them.")
+    # the comparison follows the measurement: it flips with it, and it is dropped when it is not stable
+    assert "more concentrated wave" in zl.takeaway(data, _pops(1000.0, 2000.0), stable, gate)
+    shaky = zl.takeaway(data, _pops(2971.0, 1415.0), [{"id": "live-vs-dead", "status": "encoding-specific"}], gate)
+    assert "richer" not in shaky and "are the live proof" in shaky
+    # no gate, no gate clause; a share that is not a simple fraction is given as a percentage
+    assert "gates" not in zl.takeaway(data, _pops(2971.0, 1415.0), stable, None)
+    assert zl.takeaway({"live_total": 900, "dead_total": 100}, _pops(5.0, 3.0), stable, None).startswith("10% of declarations (100, grey) are")
+    assert zl.takeaway({"live_total": 10, "dead_total": 0}, _pops(5.0, 3.0), stable, gate) is None
+    # a dip of the wave is never called a bottleneck, in any variant
+    for s in (full, shaky):
+        assert "bottleneck" not in s.lower()
+
+
+@pytest.mark.slow
+def test_build_names_the_gate_and_its_chapter(built):
+    _, _, out, _ = built
+    land = json.loads((out / "landscape.json").read_text())
+    gate = land["gate"]
+    assert gate and 0 < gate["share"] <= 100 and gate["dom_mass"] >= 1
+    home = [c for c in land["chapters"] if c["chapter"] == gate["chapter"]]
+    assert len(home) == 1 and home[0]["slug"] == gate["slug"]
+    assert land["takeaway"] and "bottleneck" not in land["takeaway"].lower()
+    findings = json.loads((out / "findings.json").read_text())
+    assert findings["gate"] == gate and findings["takeaway"] == land["takeaway"]
+    assert all("not a bottleneck" in f["detail"] for f in land["findings"] if f["id"] == "landmark")
+
+
 @pytest.mark.slow
 def test_build_is_deterministic_and_leaves_the_databases_alone(built):
     index, cone, out, report = built

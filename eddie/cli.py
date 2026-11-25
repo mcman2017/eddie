@@ -111,7 +111,7 @@ def cmd_budget_status(args: argparse.Namespace) -> int:
     _out("Eddie Metabolic Spend Governor  (muse-ember-1.0)")
     _out(f"  ledger        {settings.ledger_path}")
     if real is None:
-        _out("                NOT INITIALIZED: run `python -m eddie.cli budget init` before any live call")
+        _out("                NOT INITIALIZED: run `uv run python -m eddie.cli budget init` before any live call")
     else:
         _out(f"  anchor        {report['anchor']}")
         _out(
@@ -173,7 +173,7 @@ def cmd_budget_init(args: argparse.Namespace) -> int:
         recover=args.recover,
     )
     write_status_snapshot(ledger, caps_from_settings(settings), settings)
-    _out(f"OK: ledger anchored. Lifetime cap ${lifetime}, opening balance ${dashboard}.")
+    _out(f"OK: ledger anchored. Lifetime cap ${lifetime:.2f}, opening balance ${dashboard:.2f}.")
     return 0
 
 
@@ -301,7 +301,7 @@ def _open_index(args: argparse.Namespace):
 
     path = _index_path(args)
     if not path.exists():
-        raise ConfigError(f"no index at {path}: run `python -m eddie.cli index build --src DIR`")
+        raise ConfigError(f"no index at {path}: run `uv run python -m eddie.cli index build --src DIR`")
     return connect_ro(path)
 
 
@@ -415,7 +415,7 @@ def cmd_cone_stats(args: argparse.Namespace) -> int:
 
     path = _cone_path(args)
     if not path.exists():
-        raise ConfigError(f"no cone at {path}: run `python -m eddie.cli cone build`")
+        raise ConfigError(f"no cone at {path}: run `uv run python -m eddie.cli cone build`")
     try:
         st = cone_stats(path)
     except RuntimeError as exc:
@@ -472,7 +472,7 @@ def cmd_plan_budget(args: argparse.Namespace) -> int:
     )
     cone = Path(args.cone) if args.cone else settings.data_dir / "index" / "eddie_cone.sqlite"
     if not cone.exists():
-        raise ConfigError(f"no cone at {cone}: run `python -m eddie.cli cone build` first")
+        raise ConfigError(f"no cone at {cone}: run `uv run python -m eddie.cli cone build` first")
     plan = build_plan(settings.index_path, cone, params)
     out = Path(args.out) if args.out else settings.data_dir / "index" / "work_plan.json"
     write_json_atomic(out, plan)
@@ -505,7 +505,7 @@ def cmd_build_landscape(args: argparse.Namespace) -> int:
     settings = load_settings()
     cone = Path(args.cone) if args.cone else settings.data_dir / "index" / "eddie_cone.sqlite"
     if not cone.exists():
-        raise ConfigError(f"no cone at {cone}: run `python -m eddie.cli cone build` first")
+        raise ConfigError(f"no cone at {cone}: run `uv run python -m eddie.cli cone build` first")
     params = Params.quick() if args.quick else Params()
     if args.t_max is not None:
         step = params.t_max / (params.t_steps - 1)
@@ -534,7 +534,7 @@ def cmd_seed_demo(args: argparse.Namespace) -> int:
     settings = load_settings()
     cone = Path(args.cone) if args.cone else settings.data_dir / "index" / "eddie_cone.sqlite"
     if not cone.exists():
-        raise ConfigError(f"no cone at {cone}: run `python -m eddie.cli cone build` first")
+        raise ConfigError(f"no cone at {cone}: run `uv run python -m eddie.cli cone build` first")
     report = seed_demo(
         cone_path=cone,
         index_path=settings.index_path,
