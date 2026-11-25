@@ -19,7 +19,11 @@ from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import FileResponse
 
 from eddie import paths
+from eddie.api.atlas import register as register_atlas
+from eddie.api.atlas import witness_json
+from eddie.planner import chapters as ch
 
+CONE_VERSION = "2"
 ARTIFACT_NAME = re.compile(r"^[0-9a-f]{64}\.(png|wav|json|txt|csv|gif)$")
 MEDIA = {"png": "image/png", "gif": "image/gif", "wav": "audio/wav", "json": "application/json",
          "txt": "text/plain; charset=utf-8", "csv": "text/csv; charset=utf-8"}
@@ -38,6 +42,7 @@ class ExplorerData:
         self.artifacts_db = _env_path("EDDIE_ARTIFACTS_DB", data / "state" / "eddie_artifacts.sqlite")
         self.artifact_dir = _env_path("EDDIE_ARTIFACT_DIR", data / "artifacts")
         self.plan = _env_path("EDDIE_WORK_PLAN", data / "index" / "work_plan.json")
+        self.landscape = _env_path("EDDIE_LANDSCAPE_DIR", data / "index" / "landscape")
         self._lock = threading.Lock()
         self._cache: dict[str, tuple[Any, Any]] = {}
 
@@ -50,6 +55,9 @@ class ExplorerData:
         con = sqlite3.connect(f"file:{self.cone}?mode=ro", uri=True)
         try:
             con.row_factory = sqlite3.Row
+            version = con.execute("SELECT value FROM cone_meta WHERE key = 'cone_version'").fetchone()
+            if version is None or version[0] != CONE_VERSION:
+                raise HTTPException(503, "cone was built by an older version: run `python -m eddie.cli cone build` again")
             con.execute("ATTACH ? AS idx", (f"file:{self.index}?mode=ro",))
             if self.artifacts_db.exists():
                 con.execute("ATTACH ? AS art", (f"file:{self.artifacts_db}?mode=ro",))
@@ -127,13 +135,16 @@ def create_router() -> APIRouter:
                 ):
                     pillars.append({
                         "id": r["id"], "slug": r["slug"], "title": r["title"], "subtitle": r["subtitle"],
-                        "category": r["category"], "ord": r["ord"], "live": r["live"], "dead": r["dead"],
+                        "category": r["category"], "ord": r["ord"], "flow_ord": r["flow_ord"], "chapter": r["flow_ord"] + 1,
+                        "tier": r["tier"], "ref_in": r["ref_in"], "ref_out": r["ref_out"], "live": r["live"], "dead": r["dead"],
                         "decls": r["decls"], "modules": r["modules"],
                         "head": {"id": r["head_decl_id"], "full_name": r["head_name"]},
                         "timeline": json.loads(r["timeline"]),
                         "node_id": con.execute("SELECT id FROM tree_nodes WHERE kind = 'pillar' AND pillar_id = ?", (r["id"],)).fetchone()[0],
                     })
                 cross = con.execute("SELECT source, target, weight FROM pillar_edges ORDER BY weight DESC LIMIT 60").fetchall()
+                flows = [{"from": f["provider"], "to": f["consumer"], "net": f["net"], "forward": f["forward"],
+                          "backward": f["backward"]} for f in ch.net_flows(con)[:60]]
                 featured = []
                 sources: dict[str, int] = {}
                 if data.has_artifacts():
@@ -170,6 +181,9 @@ def create_router() -> APIRouter:
                 "roots": roots,
                 "pillars": pillars,
                 "cross_pillar_edges": [{"source": r[0], "target": r[1], "weight": r[2]} for r in cross],
+                # net reference flow, provider -> consumer: "from" is built on by "to"
+                "pillar_flows": flows,
+                "flow": {"forward_pct": float(meta.get("flow_forward_pct") or 0.0), "method": meta.get("flow_method")},
                 "featured": featured,
                 "artifact_sources": sources,
                 "plan": plan,
@@ -293,9 +307,7 @@ def create_router() -> APIRouter:
                 if i:
                     out["intuition"] = dict(i)
                 out["witnesses"] = [
-                    {**dict(w), "url": f"/api/artifacts/{w['artifact_sha256']}.{w['ext']}",
-                     "defects": json.loads(w["defects"] or "[]"), "qc": json.loads(w["qc"]) if w["qc"] else None,
-                     "critic_verdict": json.loads(w["critic_verdict"]) if w["critic_verdict"] else None}
+                    witness_json(w)
                     for w in con.execute(
                         "SELECT id, kind, title, artifact_sha256, ext, bytes, status, defects, qc, critic_verdict, supersedes_id, "
                         "pair_id, source, python_source FROM art.witnesses WHERE decl_full_name = ? ORDER BY id",
@@ -355,4 +367,5 @@ def create_router() -> APIRouter:
             con.close()
         return dict(row) if row else {"region": None}
 
+    register_atlas(router, data)
     return router

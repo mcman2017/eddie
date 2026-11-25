@@ -546,6 +546,9 @@ def cmd_seed_demo(args: argparse.Namespace) -> int:
     )
     for w in report["witnesses"]:
         _out(f"witness  {w['decl']:<40} {w['kind']:<11} {w['status']:<9} {w['sha256'][:12]}.{w['ext']}")
+    ch = report["chapters"]
+    kept = f" ({ch['kept']} already written by another source were left alone)" if ch["kept"] else ""
+    _out(f"chapters {ch['stubs']} of {ch['total']} structural stubs stored{kept}")
     _out("seeded   all rows are source='seed' and labeled as not Ember output; re-running replaces them ($0)")
     return 0
 

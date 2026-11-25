@@ -13,6 +13,7 @@ from eddie.demo.seed import SEED_PREFIX, SeedParams, Target, pick_targets, seed_
 from eddie.ingest.build import build_index
 from eddie.ingest.cone import build_cone
 from eddie.ingest.synthetic import write_sample_tree
+from eddie.planner.chapters import STUB_BADGE
 from eddie.state.artifacts import ArtifactStore, connect_ro
 
 pytestmark = pytest.mark.slow
@@ -96,3 +97,28 @@ def test_seed_artifacts_are_real_media(cone, tmp_path):
     for w in report["witnesses"]:
         if w["ext"] == "png":
             assert (store / f"{w['sha256']}.png").read_bytes()[:8] == b"\x89PNG\r\n\x1a\n"
+
+
+def test_seed_writes_one_stub_per_chapter_and_never_overwrites_real_text(cone, tmp_path):
+    index, cone_path, _ = cone
+    first = run(cone, tmp_path)
+    db = tmp_path / "state" / "art.sqlite"
+    con = sqlite3.connect(cone_path)
+    slugs = [r[0] for r in con.execute("SELECT slug FROM pillars ORDER BY flow_ord")]
+    con.close()
+    assert first["chapters"] == {"total": len(slugs), "stubs": len(slugs), "kept": 0}
+    with connect_ro(db) as con:
+        rows = {r["pillar_slug"]: dict(r) for r in con.execute("SELECT * FROM chapters")}
+    assert sorted(rows) == sorted(slugs)
+    assert {r["source"] for r in rows.values()} == {"seed"} and all(r["call_id"] is None for r in rows.values())
+    assert all(r["synthesis_md"].startswith(STUB_BADGE) for r in rows.values())
+    assert "Chapter 1 of" in rows[slugs[0]]["synthesis_md"] and "`riemannHypothesis`" in rows[slugs[-1]]["synthesis_md"]
+    # a chapter written by another source survives re-seeding untouched
+    ArtifactStore(db).put_chapter(slugs[0], "Kept", "text from a model run", source="mock", call_id="call-1")
+    second = run(cone, tmp_path)
+    assert second["chapters"] == {"total": len(slugs), "stubs": len(slugs) - 1, "kept": 1}
+    with connect_ro(db) as con:
+        kept = dict(con.execute("SELECT * FROM chapters WHERE pillar_slug = ?", (slugs[0],)).fetchone())
+        seeds = con.execute("SELECT COUNT(*) FROM chapters WHERE source = 'seed'").fetchone()[0]
+    assert (kept["synthesis_md"], kept["source"], kept["call_id"]) == ("text from a model run", "mock", "call-1")
+    assert seeds == len(slugs) - 1

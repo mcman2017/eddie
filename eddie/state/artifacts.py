@@ -265,6 +265,17 @@ class ArtifactStore:
                 (pillar_slug, title, synthesis_md, source, call_id, time.time()),
             )
 
+    def put_chapter_stub(self, pillar_slug: str, title: str, synthesis_md: str) -> bool:
+        """Store a seed placeholder unless the chapter already has text. A stub never replaces
+        what a model (or another source) wrote; returns whether it was stored."""
+        with self.tx() as con:
+            cur = con.execute(
+                "INSERT OR IGNORE INTO chapters (pillar_slug, title, synthesis_md, source, call_id, created_at) "
+                "VALUES (?, ?, ?, 'seed', NULL, ?)",
+                (pillar_slug, title, synthesis_md, time.time()),
+            )
+            return cur.rowcount == 1
+
     def set_activity(self, region: str | None, *, decl_full_name: str | None = None, message: str | None = None,
                      source: str = "seed") -> None:
         with self.tx() as con:

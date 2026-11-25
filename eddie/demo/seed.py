@@ -2,9 +2,10 @@
 
 The witness scripts in eddie/demo/witnesses/ run in the Night 1 sandbox and are attached to
 Main's final theorems, matched at run time by the Props their signatures name (no archive
-text is stored in git). Every row written here carries source='seed', every text says it is
-not an Ember translation, and each run replaces all earlier seed rows and nothing else.
-Nothing here calls a model.
+text is stored in git). It also writes one structural stub per atlas chapter, built from the
+cone's measurements. Every row written here carries source='seed', every text says it is not
+an Ember translation, and each run replaces all earlier seed rows and nothing else. A stub
+never overwrites a chapter that another source has written. Nothing here calls a model.
 """
 
 from __future__ import annotations
@@ -17,6 +18,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
+from eddie.planner.chapters import chapter_stubs
 from eddie.sandbox.runner import Limits, SandboxResult, SandboxRunner
 from eddie.state.artifacts import ArtifactStore
 
@@ -132,6 +134,7 @@ def seed_demo(
     artifact_dir: Path,
     params: SeedParams | None = None,
     activity: bool = True,
+    chapters: bool = True,
     tmp_root: Path | None = None,
     mpl_cache: Path | None = None,
     log: Callable[[str], None] = print,
@@ -212,8 +215,11 @@ def seed_demo(
     if activity:
         store.set_activity("R2.critic", decl_full_name=rh.full_name, message="SEED demo: reviewing a witness render",
                            source="seed")
+    stubs = chapter_stubs(cone_path, index_path) if chapters else []
+    stored = [s["slug"] for s in stubs if store.put_chapter_stub(s["slug"], s["title"], s["markdown"])]
     return {
         "targets": {k: asdict(v) for k, v in targets.items()},
         "witnesses": written,
+        "chapters": {"total": len(stubs), "stubs": len(stored), "kept": len(stubs) - len(stored)},
         "sandbox": {k: {"status": r.status, "duration_s": r.duration_s, "job_id": r.job_id} for k, r in results.items()},
     }
