@@ -90,7 +90,7 @@ def content_violations(path: str, blob: bytes) -> list[str]:
         return []
     text = blob.decode("utf-8", errors="replace")
     return [
-        f"{path}: looks like it contains a {label}"
+        f"{path}: looks like it contains a secret ({label})"
         for label, pattern in SECRET_PATTERNS.items()
         if pattern.search(text)
     ]
