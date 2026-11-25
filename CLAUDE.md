@@ -24,7 +24,8 @@ Eddie decompiles a formally verified Lean 4 proof archive into human sight, soun
 - `uv run python scripts/fetch_riemann_archive.py --sample` (synthetic tree) or `--p0 --pdf` (real archive into `data/raw/`)
 - `uv run python -m eddie.cli index build --src data/raw/extracted`, then `index stats` / `search` / `show`
 - `uv run python -m eddie.cli budget status|init|export-trace|trip|reset-breaker`
-- `make api`, then `make web` (API on :8765, Vite on :5173)
+- `make cone` (cone build, ~1 min), `make plan` (plan-budget), `make seed` (seed-demo), then `make dev` (API and Vite on 127.0.0.1:8765 and :5173)
+- Visual checks: headless `google-chrome` against 127.0.0.1 only; seed rows are `source='seed'` and must never be shown or reported as Ember output.
 
 ## Layout
-`eddie/llm/` holds the governor and gateway. `eddie/ingest/` holds the Lean parser, DAG and index. `eddie/sandbox/` holds the script runner. `eddie/api/` is the read-only FastAPI app. `web/` is the React/Vite/Canvas UI. `scripts/` holds the fetcher and hygiene checks. `k8s/` holds manifests (keyless, read-only).
+`eddie/llm/` holds the governor and gateway. `eddie/ingest/` holds the Lean parser, DAG, index, reference graph, cone and zoom tree. `eddie/planner/` holds pillars and the budget planner. `eddie/state/` is the mutable artifacts DB. `eddie/sandbox/` holds the script runner and `eddie/demo/` the seed witnesses. `eddie/api/` is the read-only FastAPI app. `web/` is the React/Vite/Canvas explorer. `scripts/` holds the fetcher and hygiene checks. `k8s/` holds manifests (keyless, read-only).
