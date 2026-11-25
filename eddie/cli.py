@@ -385,6 +385,30 @@ def cmd_index_validate(args: argparse.Namespace) -> int:
     return 0
 
 
+# --- sandbox --------------------------------------------------------------------------------
+
+
+def cmd_sandbox_run(args: argparse.Namespace) -> int:
+    from eddie.sandbox.runner import Limits, SandboxRunner
+
+    script = Path(args.script).read_text(encoding="utf-8")
+    runner = SandboxRunner(limits=Limits(wall_s=args.timeout, cpu_s=int(args.timeout)))
+    res = asyncio.run(runner.run(script, postprocess=not args.no_postprocess))
+    _out(f"status        {res.status}  (rc={res.returncode}, {res.duration_s}s)")
+    if res.stdout.strip():
+        _out("stdout        " + res.stdout.strip()[:2000].replace("\n", "\n              "))
+    if res.stderr.strip():
+        _out("stderr        " + res.stderr.strip()[-2000:].replace("\n", "\n              "))
+    for v in res.violations:
+        _out(f"VIOLATION     {v['event']}: {v['detail']}")
+    for a in res.artifacts:
+        defects = res.qc.get(a.name, {}).get("defects")
+        _out(f"artifact      {a.name:<32} {a.kind:<6} {a.bytes:>9} B  {a.store_path}" + (f"  DEFECTS {defects}" if defects else ""))
+    for r in res.rejected:
+        _out(f"rejected      {r}")
+    return 0 if res.status == "ok" else 5
+
+
 # --- parser ---------------------------------------------------------------------------------
 
 
@@ -460,6 +484,13 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("spine")
     p.add_argument("--index")
     p.set_defaults(func=cmd_index_validate)
+
+    sandbox = sub.add_parser("sandbox", help="guarded script runner").add_subparsers(dest="action", required=True)
+    p = sandbox.add_parser("run", help="run a generated script; collect plots/audio + spectrograms + QC")
+    p.add_argument("script")
+    p.add_argument("--timeout", type=float, default=30.0)
+    p.add_argument("--no-postprocess", action="store_true")
+    p.set_defaults(func=cmd_sandbox_run)
 
     for register in _EXTRA_COMMANDS:
         register(sub)
