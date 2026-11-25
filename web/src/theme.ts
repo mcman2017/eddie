@@ -31,3 +31,31 @@ export const STATUS_LABEL: Record<Status, string> = {
   live: "Unvisited live",
   dead: "Pruned dead",
 };
+
+// The one-hue ramp of the witness plots (dark ground to the verified light), used by the 3D
+// terrain: evenly spaced in perceived lightness, so height reads as stain intensity.
+export const RAMP = ["#0b1220", "#0d366b", "#1c5cab", "#3987e5", "#86b6ef", "#cde2fb"] as const;
+
+// Dead code in 3D: the same idea in a cold, unstained indigo.
+export const DEAD_RAMP = ["#0b0e1c", "#151a36", "#232a58", "#3a4288"] as const;
+
+// The four acts are an order, so they share the hue and step in lightness (ordinal ramp).
+export const TIER_FILL = {
+  foundations: "#1c5cab",
+  machinery: "#3987e5",
+  bottleneck: "#86b6ef",
+  main: "#cde2fb",
+} as const;
+
+export const TIER_LABEL = {
+  foundations: "Foundations",
+  machinery: "Intermediate machinery",
+  bottleneck: "Bottleneck",
+  main: "Main",
+} as const;
+
+/** "#rrggbb" as display-referred [r, g, b] in 0..1 (what a shader should output unchanged). */
+export function srgb(hex: string): [number, number, number] {
+  const n = parseInt(hex.slice(1), 16);
+  return [((n >> 16) & 255) / 255, ((n >> 8) & 255) / 255, (n & 255) / 255];
+}

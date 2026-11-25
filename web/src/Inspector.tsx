@@ -64,9 +64,9 @@ export function Inspector({ declId, onSelect }: { declId: number | null; onSelec
 
   if (declId == null || !detail) {
     return (
-      <aside className="inspector inspector-empty" aria-label="Theorem inspector">
+      <div className="inspector inspector-empty">
         {error ? <p className="note-error">{error}</p> : <p>Select a declaration on the map, or find one by name.</p>}
-      </aside>
+      </div>
     );
   }
 
@@ -81,7 +81,7 @@ export function Inspector({ declId, onSelect }: { declId: number | null; onSelec
       : `lines ${d.citation.start_line}–${d.citation.end_line}`;
 
   return (
-    <aside className="inspector" aria-label="Theorem inspector" aria-busy={detail.id !== declId}>
+    <div className="inspector" aria-busy={detail.id !== declId}>
       <header className="insp-head">
         <div className="insp-tags">
           <span className="kind">{d.kind}</span>
@@ -198,7 +198,7 @@ export function Inspector({ declId, onSelect }: { declId: number | null; onSelec
         </Section>
       )}
       {error && <p className="note-error">{error}</p>}
-    </aside>
+    </div>
   );
 }
 

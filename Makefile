@@ -1,7 +1,7 @@
 UV ?= uv
 PY := $(UV) run python
 
-.PHONY: setup test lint fmt hygiene sample fetch index stats cone plan seed dev api web web-build docker compose-up compose-down k8s-validate
+.PHONY: setup test lint fmt hygiene sample fetch index stats cone landscape plan seed dev api web web-build docker compose-up compose-down k8s-validate
 
 setup: ## install Python deps into .venv and web deps into web/node_modules
 	$(UV) sync
@@ -34,6 +34,9 @@ stats:
 
 cone: ## $0 declaration graph, live proof cone, pillars and zoom tree (needs the index)
 	$(PY) -m eddie.cli cone build
+
+landscape: ## $0 zeta terrain + proof wave + findings for the 3D critical strip (needs the cone)
+	$(PY) -m eddie.cli build-landscape
 
 plan: ## exact tiered Ember work plan inside $$6.50 ($0: no model calls)
 	$(PY) -m eddie.cli plan-budget --target-usd 6.50

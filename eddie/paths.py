@@ -84,5 +84,10 @@ def default_artifact_dir() -> Path:
     return data_dir() / "artifacts"
 
 
+def landscape_dir() -> Path:
+    """Precomputed 3D landscape assets. Under `index/` so the read-only container mount covers it."""
+    return Path(os.environ.get("EDDIE_LANDSCAPE_DIR") or data_dir() / "index" / "landscape")
+
+
 def default_raw_dir() -> Path:
     return data_dir() / "raw"

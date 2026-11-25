@@ -24,8 +24,10 @@ Eddie decompiles a formally verified Lean 4 proof archive into human sight, soun
 - `uv run python scripts/fetch_riemann_archive.py --sample` (synthetic tree) or `--p0 --pdf` (real archive into `data/raw/`)
 - `uv run python -m eddie.cli index build --src data/raw/extracted`, then `index stats` / `search` / `show`
 - `uv run python -m eddie.cli budget status|init|export-trace|trip|reset-breaker`
-- `make cone` (cone build, ~1 min), `make plan` (plan-budget), `make seed` (seed-demo), then `make dev` (API and Vite on 127.0.0.1:8765 and :5173)
-- Visual checks: headless `google-chrome` against 127.0.0.1 only; seed rows are `source='seed'` and must never be shown or reported as Ember output.
+- `make cone` (cone build, ~1 min), `make landscape` (build-landscape, ~30 s), `make plan` (plan-budget), `make seed` (seed-demo), then `make dev` (API and Vite on 127.0.0.1:8765 and :5173)
+- Visual checks: headless `google-chrome` against 127.0.0.1 only (`node scripts/verify_strip.mjs` after `make web-build` and `make api`; screenshots land in `data/verify/`); seed rows are `source='seed'` and must never be shown or reported as Ember output.
+- The cone keeps two pillar orders: `ord` (zoom tree and budget planner; pillar 0 first) and `flow_ord` (chapter order). Change `flow_ord` only; changing `ord` moves the budget plan.
+- Claims about the proof wave follow `findings.json`: say "stable" only for what holds across the encoding ensemble, never call a dip a bottleneck, and never present the wave as a number-theoretic object.
 
 ## Layout
-`eddie/llm/` holds the governor and gateway. `eddie/ingest/` holds the Lean parser, DAG, index, reference graph, cone and zoom tree. `eddie/planner/` holds pillars and the budget planner. `eddie/state/` is the mutable artifacts DB. `eddie/sandbox/` holds the script runner and `eddie/demo/` the seed witnesses. `eddie/api/` is the read-only FastAPI app. `web/` is the React/Vite/Canvas explorer. `scripts/` holds the fetcher and hygiene checks. `k8s/` holds manifests (keyless, read-only).
+`eddie/llm/` holds the governor and gateway. `eddie/ingest/` holds the Lean parser, DAG, index, reference graph, cone and zoom tree. `eddie/planner/` holds pillars and chapter flow, the atlas facts (`chapters.py`), the landscape precomputation (`zeta_landscape.py`) and the budget planner. `eddie/state/` is the mutable artifacts DB. `eddie/sandbox/` holds the script runner and `eddie/demo/` the seed witnesses. `eddie/api/` is the read-only FastAPI app. `web/` is the React/Vite explorer (`src/strip/` is the Three.js critical strip, `mapEngine.ts` the dependency wheel). `scripts/` holds the fetcher and hygiene checks. `k8s/` holds manifests (keyless, read-only).

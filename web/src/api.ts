@@ -12,6 +12,17 @@ export interface BudgetSnapshot {
   kill_switch?: boolean;
 }
 
+export type Tier = "foundations" | "machinery" | "bottleneck" | "main";
+
+/** Net reference flow between two pillars: `to` builds on `from`. */
+export interface PillarFlow {
+  from: number;
+  to: number;
+  net: number;
+  forward: number;
+  backward: number;
+}
+
 export interface PillarSummary {
   id: number;
   slug: string;
@@ -19,6 +30,12 @@ export interface PillarSummary {
   subtitle: string | null;
   category: string;
   ord: number;
+  /** Position in the proof's flow, 0 = most foundational; `chapter` is flow_ord + 1. */
+  flow_ord: number;
+  chapter: number;
+  tier: Tier;
+  ref_in: number;
+  ref_out: number;
   live: number;
   dead: number;
   decls: number;
@@ -34,6 +51,8 @@ export interface Overview {
   roots: { id: number; full_name: string }[];
   pillars: PillarSummary[];
   cross_pillar_edges: { source: number; target: number; weight: number }[];
+  pillar_flows: PillarFlow[];
+  flow: { forward_pct: number; method: string | null };
   featured: { decl_id: number; full_name: string; kinds: string[]; statuses: string[] }[];
   artifact_sources?: Record<string, number>;
   plan: null | {
@@ -118,6 +137,59 @@ export interface DeclDetail {
   planned: { tier: number; kind: string; scheduled_day: string | null; status: string } | null;
 }
 
+export interface ChapterNeighbour {
+  slug: string;
+  title: string;
+  chapter: number;
+  net: number;
+}
+
+export interface ChapterTheorem {
+  id: number;
+  kind: string;
+  full_name: string;
+  signature: string;
+  dom_mass: number;
+  dom_share: number;
+  status: "verified" | "triaged" | "live" | "dead";
+}
+
+export interface ChapterSummary {
+  pillar_id: number;
+  slug: string;
+  title: string;
+  tier: Tier;
+  tier_label: string;
+  chapter: number;
+  chapters: number;
+  modules: number;
+  live: number;
+  dead: number;
+  net: number;
+  ref_in: number;
+  ref_out: number;
+  remark_steps: { number: number; phrase: string }[];
+  prev: string | null;
+  next: string | null;
+  /** Who wrote the chapter text: "seed" is a $0 structural stub, never model output. */
+  source: string | null;
+  badge: string | null;
+  node_id: number | null;
+  verified_witnesses: number;
+}
+
+export interface ChapterDetail extends ChapterSummary {
+  live_total: number;
+  synthesis_md: string | null;
+  builds_on: ChapterNeighbour[];
+  feeds: ChapterNeighbour[];
+  bottlenecks: ChapterTheorem[];
+  final_theorems: ChapterTheorem[];
+  witnesses: (Witness & { decl_id: number; decl_full_name: string })[];
+  reviews: DeclDetail["reviews"];
+  planned: { milestones: number; first_day: string | null; consolidation_day: string | null } | null;
+}
+
 export interface Neighbors {
   uses: { id: number; full_name: string; kind: string; live: number }[];
   used_by: { id: number; full_name: string; kind: string; live: number }[];
@@ -130,10 +202,38 @@ export interface Activity {
   source?: string | null;
 }
 
-async function getJson<T>(url: string): Promise<T> {
+/** A failed request. The message keeps the old `url: HTTP status` prefix and adds the API's own hint. */
+export class ApiError extends Error {
+  constructor(
+    readonly url: string,
+    readonly status: number,
+    readonly detail: string | null,
+  ) {
+    super(`${url}: HTTP ${status}${detail ? ` (${detail})` : ""}`);
+  }
+}
+
+async function fail(url: string, res: Response): Promise<never> {
+  let detail: string | null = null;
+  try {
+    const body = (await res.json()) as { detail?: unknown };
+    if (typeof body.detail === "string") detail = body.detail;
+  } catch {
+    /* not JSON */
+  }
+  throw new ApiError(url, res.status, detail);
+}
+
+export async function getJson<T>(url: string): Promise<T> {
   const res = await fetch(url, { headers: { Accept: "application/json" } });
-  if (!res.ok) throw new Error(`${url}: HTTP ${res.status}`);
+  if (!res.ok) return fail(url, res);
   return (await res.json()) as T;
+}
+
+export async function getBuffer(url: string): Promise<ArrayBuffer> {
+  const res = await fetch(url);
+  if (!res.ok) return fail(url, res);
+  return res.arrayBuffer();
 }
 
 export const api = {
@@ -145,6 +245,8 @@ export const api = {
   decl: (id: number) => getJson<DeclDetail>(`/api/decl/${id}`),
   neighbors: (id: number) => getJson<Neighbors>(`/api/decl/${id}/neighbors?limit=8`),
   declBody: (id: number) => getJson<{ body?: string }>(`/api/decl/${id}?body=1`),
+  chapters: () => getJson<{ chapters: ChapterSummary[]; stub_badge: string; flow: { forward_pct: number } }>("/api/chapters"),
+  chapter: (slug: string) => getJson<ChapterDetail>(`/api/chapters/${encodeURIComponent(slug)}`),
   search: (q: string) =>
     getJson<{ results: { id: number; kind: string; full_name: string | null; module: string; signature: string }[] }>(
       `/api/search?q=${encodeURIComponent(q)}&limit=12`,

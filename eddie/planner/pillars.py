@@ -8,8 +8,12 @@ companion PDF is hard-coded here.
    holds too much of the live mass, the heaviest group is split into its children. Slivers
    fold into "<parent> (other)", and the result is clamped to K_MIN..K_MAX.
 3. Titles are humanized directory names. When the companion PDF's numbered timeline has a
-   step whose words match a pillar's module-path and declaration-name vocabulary, that step
-   becomes the pillar's subtitle; each step is used at most once.
+   step whose words match one pillar's module-path and declaration-name vocabulary clearly
+   better than any other pillar's, that step becomes the pillar's subtitle; each step is
+   used at most once, and a step that matches several pillars about equally stays unplaced.
+4. Chapters follow the directed proof flow: pillars are ordered so that as much of the
+   cross-pillar reference weight as possible points from an earlier pillar (the provider)
+   to a later one (the consumer), in four acts ending at the top-level reduction.
 """
 
 from __future__ import annotations
@@ -21,10 +25,20 @@ from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
 
+import numpy as np
+
 K_MIN, K_TARGET, K_MAX = 12, 16, 20
 MAX_FRAC = 0.20
 MIN_FRAC = 0.01
 CORE_TOPS = ("Main", "Statements", "Supplements")
+
+TIERS = ("foundations", "machinery", "bottleneck", "main")
+FOUNDATION_NET = 1 / 3  # (in - out) / (in + out) at or above this: other pillars mostly build on it
+BOTTLENECK_DOM = 0.01  # one theorem dominating at least this share of the live cone
+EXACT_LIMIT = 20  # non-core pillars the exact subset search handles (2^20 states)
+TIMELINE_MIN_SCORE = 0.02
+TIMELINE_MIN_MARGIN = 1.5  # the best pillar must beat the runner-up by this factor
+TIMELINE_MAX_DF = 0.8  # a title word used by more than this share of the pillars proves nothing
 
 _CAMEL = re.compile(r"[A-Z]+(?=[A-Z][a-z])|[A-Z]?[a-z]+|[A-Z]+|\d+")
 _STOP = frozenset(
@@ -64,6 +78,26 @@ class TimelineItem:
     phrase: str
     raw: str
     words: list[str]
+
+    @property
+    def clean(self) -> bool:
+        """False for a fallback title or one with stray brackets (garbled math from the PDF)."""
+        return self.phrase != f"Step {self.number}" and not re.search(r"[()\[\]{}]", self.phrase)
+
+    @property
+    def phrase_words(self) -> set[str]:
+        return {normalize_word(w) for w in re.findall(r"[^\W\d_][\w'’-]+", self.phrase)}
+
+
+@dataclass
+class TimelineMatch:
+    """How one timeline step scored against the pillars; `pillar` is set only when confident."""
+
+    number: int
+    pillar: int | None
+    candidate: int | None
+    score: float
+    margin: float  # best score / runner-up score (99 when nothing else matched)
 
 
 def extract_pdf_text(path: Path) -> str:
@@ -264,40 +298,68 @@ def assign_modules(module_names: list[str], specs: list[PillarSpec]) -> list[int
     return out
 
 
-def match_timeline(specs: list[PillarSpec], vocab: list[Counter], items: list[TimelineItem]) -> None:
-    """Attach each timeline step to the pillar whose vocabulary it matches best (tf-idf)."""
+def match_timeline(specs: list[PillarSpec], vocab: list[Counter], items: list[TimelineItem]) -> list[TimelineMatch]:
+    """Attach a timeline step to a pillar only when the vocabulary match is unambiguous.
+
+    Each step is scored against every pillar (tf-idf over shared words). It is placed when
+    its best pillar scores at least TIMELINE_MIN_SCORE, beats the runner-up by
+    TIMELINE_MIN_MARGIN, shares an informative word with the step's own title phrase (not
+    only with the paragraph after it, and not a word nearly every pillar uses), and the
+    title is not garbled. Everything else is returned as an unplaced candidate, so a guess
+    is never shown as a chapter title.
+    """
     if not items:
-        return
+        return []
     df: Counter[str] = Counter()
     for bag in vocab:
         df.update(set(bag))
     n_pillars = len(vocab)
-    scored = []
+    best: dict[int, tuple[float, int, list[str], float]] = {}
     for item in items:
+        ranked = []
         for p, bag in enumerate(vocab):
             if p == 0:
                 continue
             total = sum(bag.values()) or 1
             score = 0.0
             hits = []
-            for w in set(item.words):
+            for w in sorted(set(item.words)):
                 if bag.get(w):
                     idf = math.log((1 + n_pillars) / (1 + df[w]))
                     score += (bag[w] / total) ** 0.5 * idf
                     hits.append(w)
             if score > 0:
-                scored.append((score, item.number, p, hits))
-    scored.sort(key=lambda t: (-t[0], t[1], t[2]))
-    used_items: set[int] = set()
+                ranked.append((score, p, hits))
+        ranked.sort(key=lambda t: (-t[0], t[1]))
+        if ranked:
+            runner_up = ranked[1][0] if len(ranked) > 1 else 0.0
+            margin = min(99.0, ranked[0][0] / runner_up) if runner_up > 0 else 99.0
+            best[item.number] = (ranked[0][0], ranked[0][1], ranked[0][2], margin)
+
+    by_number = {i.number: i for i in items}
+    placed: dict[int, int] = {}
     per_pillar: Counter[int] = Counter()
-    for score, number, p, hits in scored:
-        if number in used_items or per_pillar[p] >= 2 or score < 0.02:
+    for number in sorted(best, key=lambda n: (-best[n][0], n)):
+        score, p, hits, margin = best[number]
+        item = by_number[number]
+        informative = {w for w in hits if df[w] <= TIMELINE_MAX_DF * n_pillars}
+        confident = (
+            score >= TIMELINE_MIN_SCORE
+            and margin >= TIMELINE_MIN_MARGIN
+            and item.clean
+            and bool(item.phrase_words & informative)
+        )
+        if not confident or per_pillar[p] >= 2:
             continue
-        item = next(i for i in items if i.number == number)
         specs[p].timeline.append(item)
         specs[p].keywords = sorted(set(specs[p].keywords) | set(hits))
-        used_items.add(number)
+        placed[number] = p
         per_pillar[p] += 1
+    out = []
+    for item in items:
+        score, p, _hits, margin = best.get(item.number, (0.0, None, [], 0.0))
+        out.append(TimelineMatch(item.number, placed.get(item.number), p, round(score, 6), round(margin, 3)))
+    return out
 
 
 def pillar_vocabulary(module_names: list[str], module_pillar: list[int], module_live: list[int],
@@ -321,3 +383,165 @@ def pillar_vocabulary(module_names: list[str], module_pillar: list[int], module_
                     vocab[p][w] += 1
     return vocab
 
+
+
+# --- directed proof flow ----------------------------------------------------------------------------
+
+
+@dataclass
+class Flow:
+    """Chapter order of the pillars. `weights[u][d]` counts references from pillar u to pillar d,
+    so u builds on d and the proof flows from d (the provider) to u (the consumer)."""
+
+    order: list[int]  # pillar ids, foundations first, the core last
+    rank: dict[int, int]
+    tier: dict[int, str]
+    ref_in: dict[int, int]  # references other pillars make to this one
+    ref_out: dict[int, int]  # references this pillar makes to others
+    forward: int  # reference weight whose provider comes before its consumer
+    total: int
+    exact: bool
+
+    @property
+    def forward_frac(self) -> float:
+        return self.forward / self.total if self.total else 1.0
+
+    def net(self, p: int) -> float:
+        both = self.ref_in[p] + self.ref_out[p]
+        return (self.ref_in[p] - self.ref_out[p]) / both if both else 0.0
+
+
+def _exact_order(w: np.ndarray) -> list[int]:
+    """The linear order with the least reference weight pointing at a later pillar.
+
+    Dynamic programming over subsets (minimum feedback arc set): `best[S]` is the least
+    backward weight of any order of the pillars in S, and placing v last after the set T
+    costs every reference from T to v. Exact, and deterministic on ties.
+    """
+    k = len(w)
+    if k <= 1:
+        return list(range(k))
+    full = 1 << k
+    masks = np.arange(full, dtype=np.int64)
+    bits = ((masks[:, None] >> np.arange(k)) & 1).astype(np.int64)
+    pop = bits.sum(axis=1)
+    into = bits @ w  # into[T, v] = references from the pillars in T to v
+    best = np.full(full, np.iinfo(np.int64).max, dtype=np.int64)
+    best[0] = 0
+    last = np.full(full, -1, dtype=np.int64)
+    for layer in range(1, k + 1):
+        sel = masks[pop == layer]
+        for v in range(k):
+            s = sel[((sel >> v) & 1) == 1]
+            prev = s ^ (1 << v)
+            cand = best[prev] + into[prev, v]
+            better = cand < best[s]
+            best[s[better]] = cand[better]
+            last[s[better]] = v
+    order: list[int] = []
+    mask = full - 1
+    while mask:
+        v = int(last[mask])
+        order.append(v)
+        mask ^= 1 << v
+    order.reverse()
+    return order
+
+
+def _greedy_order(w: np.ndarray) -> list[int]:
+    """Fallback above EXACT_LIMIT pillars: most-used first, then adjacent swaps while they help."""
+    k = len(w)
+    remaining = set(range(k))
+    order: list[int] = []
+    while remaining:
+        pick = max(sorted(remaining), key=lambda v: sum(int(w[u, v]) - int(w[v, u]) for u in remaining))
+        order.append(pick)
+        remaining.discard(pick)
+    improved = True
+    while improved:
+        improved = False
+        for i in range(k - 1):
+            a, b = order[i], order[i + 1]
+            if w[a, b] > w[b, a]:  # a (earlier) builds on b (later): swapping removes more than it adds
+                order[i], order[i + 1] = b, a
+                improved = True
+    return order
+
+
+def flow_order(weights, core: int = 0) -> tuple[list[int], bool]:
+    """Pillar ids from the most foundational to the core (pinned last), and whether it is exact."""
+    w = np.asarray(weights, dtype=np.int64)
+    n = len(w)
+    ids = [p for p in range(n) if p != core]
+    sub = w[np.ix_(ids, ids)] if ids else np.zeros((0, 0), dtype=np.int64)
+    exact = len(ids) <= EXACT_LIMIT
+    local = _exact_order(sub) if exact else _greedy_order(sub)
+    return [ids[i] for i in local] + ([core] if 0 <= core < n else []), exact
+
+
+def forward_weight(weights, order: list[int]) -> tuple[int, int]:
+    """(weight whose provider precedes its consumer in `order`, total cross-pillar weight)."""
+    w = np.asarray(weights, dtype=np.int64)
+    pos = {p: i for i, p in enumerate(order)}
+    forward = total = 0
+    for u in order:
+        for d in order:
+            if u == d or not w[u, d]:
+                continue
+            total += int(w[u, d])
+            if pos[d] < pos[u]:
+                forward += int(w[u, d])
+    return forward, total
+
+
+def pillar_flow(weights, dom_share: dict[int, float] | None = None, core: int = 0) -> Flow:
+    """Tier every pillar and order the chapters as four contiguous acts.
+
+    foundations: a net provider, (in - out) / (in + out) >= FOUNDATION_NET;
+    bottleneck:  a net consumer holding one theorem that dominates >= BOTTLENECK_DOM of the live cone;
+    machinery:   everything between;  main: the core.
+    Inside an act the pillars keep their position in the exact minimum-feedback order.
+    """
+    w = np.array(weights, dtype=np.int64)
+    np.fill_diagonal(w, 0)
+    n = len(w)
+    dom_share = dom_share or {}
+    base, exact = flow_order(w, core)
+    ref_out = {p: int(w[p].sum()) for p in range(n)}
+    ref_in = {p: int(w[:, p].sum()) for p in range(n)}
+
+    def tier(p: int) -> str:
+        if p == core:
+            return "main"
+        both = ref_in[p] + ref_out[p]
+        net = (ref_in[p] - ref_out[p]) / both if both else 0.0
+        if net >= FOUNDATION_NET:
+            return "foundations"
+        if net < 0 and dom_share.get(p, 0.0) >= BOTTLENECK_DOM:
+            return "bottleneck"
+        return "machinery"
+
+    tiers = {p: tier(p) for p in range(n)}
+    position = {p: i for i, p in enumerate(base)}
+    order = sorted(base, key=lambda p: (TIERS.index(tiers[p]), position[p]))
+    forward, total = forward_weight(w, order)
+    return Flow(order=order, rank={p: i for i, p in enumerate(order)}, tier=tiers, ref_in=ref_in, ref_out=ref_out,
+                forward=forward, total=total, exact=exact)
+
+
+def net_flows(weights, order: list[int] | None = None) -> list[dict[str, int]]:
+    """Directed pairs provider -> consumer with their net reference weight, heaviest first."""
+    w = np.asarray(weights, dtype=np.int64)
+    n = len(w)
+    pos = {p: i for i, p in enumerate(order)} if order else {p: p for p in range(n)}
+    out = []
+    for a in range(n):
+        for b in range(a + 1, n):
+            ab, ba = int(w[a, b]), int(w[b, a])  # ab: a builds on b
+            if ab == ba:
+                continue
+            provider, consumer = (b, a) if ab > ba else (a, b)
+            out.append({"provider": provider, "consumer": consumer, "net": abs(ab - ba),
+                        "forward": max(ab, ba), "backward": min(ab, ba)})
+    out.sort(key=lambda f: (-f["net"], pos.get(f["provider"], 0), pos.get(f["consumer"], 0)))
+    return out

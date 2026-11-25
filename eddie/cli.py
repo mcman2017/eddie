@@ -4,6 +4,7 @@
     python -m eddie.cli llm ping --region R1.triage --effort minimal --max-output-tokens 16
     python -m eddie.cli index build|stats|search|show|validate-spine
     python -m eddie.cli sandbox run SCRIPT.py
+    python -m eddie.cli cone build|stats, plan-budget, build-landscape, seed-demo
 """
 
 from __future__ import annotations
@@ -415,7 +416,10 @@ def cmd_cone_stats(args: argparse.Namespace) -> int:
     path = _cone_path(args)
     if not path.exists():
         raise ConfigError(f"no cone at {path}: run `python -m eddie.cli cone build`")
-    st = cone_stats(path)
+    try:
+        st = cone_stats(path)
+    except RuntimeError as exc:
+        raise ConfigError(str(exc)) from exc
     m = st["meta"]
     if getattr(args, "json", False):
         _out(json.dumps(st, indent=2))
@@ -428,10 +432,13 @@ def cmd_cone_stats(args: argparse.Namespace) -> int:
         _out(f"graph check   our reference graph reaches {a['graph_live']:,}: precision {a['precision']:.3f}, recall {a['recall']:.3f} vs the spine")
     _out(f"edges         {int(m['edges']):,} reference edges ({int(m['weak_edges']):,} weak), {int(m['live_edges']):,} inside the live cone; max depth {m['max_depth']}")
     _out(f"roots         {', '.join(m['roots'])}")
-    _out(f"pillars       {m['pillars']}  (PDF timeline: {m['timeline_matched']}/{m['timeline_steps']} steps matched)")
+    _out(f"pillars       {m['pillars']}  (PDF timeline: {m['timeline_matched']}/{m['timeline_steps']} steps placed with confidence)")
+    _out(f"flow          {m['flow_forward_pct']}% of cross-pillar references point forward in chapter order ({m['flow_method']})")
     for p in st["pillars"]:
+        both = p["ref_in"] + p["ref_out"]
+        net = (p["ref_in"] - p["ref_out"]) / both if both else 0.0
         sub = f"  ~ {p['subtitle']}" if p["subtitle"] else ""
-        _out(f"  {p['ord']:>2}. {p['title'][:52]:<52} live {p['live']:>8,}  dead {p['dead']:>7,}  depth~{(p['median_depth'] or 0):.0f}{sub[:90]}")
+        _out(f"  ch {p['flow_ord'] + 1:>2}  {p['tier']:<11} {p['title'][:50]:<50} live {p['live']:>8,}  dead {p['dead']:>7,}  net {net:+.2f}{sub[:80]}")
     return 0
 
 
@@ -487,6 +494,37 @@ def cmd_plan_budget(args: argparse.Namespace) -> int:
     return 0
 
 
+# --- build-landscape ----------------------------------------------------------------------------
+
+
+def cmd_build_landscape(args: argparse.Namespace) -> int:
+    from dataclasses import replace
+
+    from eddie.planner.zeta_landscape import Params, build_landscape
+
+    settings = load_settings()
+    cone = Path(args.cone) if args.cone else settings.data_dir / "index" / "eddie_cone.sqlite"
+    if not cone.exists():
+        raise ConfigError(f"no cone at {cone}: run `python -m eddie.cli cone build` first")
+    params = Params.quick() if args.quick else Params()
+    if args.t_max is not None:
+        step = params.t_max / (params.t_steps - 1)
+        params = replace(params, t_max=args.t_max, t_steps=round(args.t_max / step) + 1)
+    if args.bands is not None:
+        params = replace(params, bands=args.bands)
+    if args.surrogates is not None:
+        params = replace(params, surrogates=args.surrogates)
+    out = Path(args.out) if args.out else paths.landscape_dir()
+    try:
+        report = build_landscape(Path(args.index) if args.index else settings.index_path, cone, out, params, log=_out)
+    except RuntimeError as exc:
+        raise ConfigError(str(exc)) from exc
+    for f in report["findings"]:
+        _out(f"finding   [{f['status']}] {f['headline']}")
+    _out("landscape $0: zeta by mpmath, the proof wave from the index and cone; no model was called")
+    return 0
+
+
 # --- seed-demo --------------------------------------------------------------------------------
 
 
@@ -508,6 +546,9 @@ def cmd_seed_demo(args: argparse.Namespace) -> int:
     )
     for w in report["witnesses"]:
         _out(f"witness  {w['decl']:<40} {w['kind']:<11} {w['status']:<9} {w['sha256'][:12]}.{w['ext']}")
+    ch = report["chapters"]
+    kept = f" ({ch['kept']} already written by another source were left alone)" if ch["kept"] else ""
+    _out(f"chapters {ch['stubs']} of {ch['total']} structural stubs stored{kept}")
     _out("seeded   all rows are source='seed' and labeled as not Ember output; re-running replaces them ($0)")
     return 0
 
@@ -642,6 +683,16 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--out")
     p.add_argument("--no-db", action="store_true", help="do not load the queue into eddie_artifacts.sqlite")
     p.set_defaults(func=cmd_plan_budget)
+
+    p = sub.add_parser("build-landscape", help="$0 zeta terrain + the proof's Dirichlet wave for the 3D critical strip")
+    p.add_argument("--index")
+    p.add_argument("--cone")
+    p.add_argument("--out", help="output directory (default data/index/landscape)")
+    p.add_argument("--quick", action="store_true", help="tiny grids (a second); for smoke tests")
+    p.add_argument("--t-max", type=float, help="top of the box (default 60)")
+    p.add_argument("--bands", type=int, help="harmonic bands (default 8)")
+    p.add_argument("--surrogates", type=int, help="torus surrogates for the chance baseline (default 199, 0 skips)")
+    p.set_defaults(func=cmd_build_landscape)
 
     p = sub.add_parser("seed-demo", help="$0 sandbox witnesses for the explorer (labeled seed, never Ember)")
     p.add_argument("--cone")
