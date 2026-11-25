@@ -225,3 +225,131 @@ def compute_metrics(
         pagerank=rank,
         in_cycle=in_cycle,
     )
+
+
+# --- declaration-level algorithms ---------------------------------------------------------------
+
+
+def csr(n: int, src: np.ndarray, dst: np.ndarray) -> tuple[list[int], list[int]]:
+    """CSR adjacency as Python lists (fast scalar indexing in tight loops)."""
+    ptr, idx = _csr(n, np.asarray(src, dtype=np.int64), np.asarray(dst, dtype=np.int64))
+    return ptr.tolist(), idx.tolist()
+
+
+def immediate_dominators(n: int, src: np.ndarray, dst: np.ndarray, roots: list[int]) -> tuple[np.ndarray, list[int]]:
+    """Cooper–Harvey–Kennedy iterative dominators from a virtual super-root over `roots`.
+
+    Edges point user -> used, so a declaration d dominates v when every reference path
+    from Main to v passes through d. Returns (idom, postorder):
+    * idom[v] is the immediate dominator of v;
+    * idom[v] == n means v is dominated only by the virtual root;
+    * idom[v] == -1 means v is unreachable.
+    Converges in one pass on DAGs (plus one verification pass); cycles also work.
+    """
+    S = n
+    ptr, idx = csr(n, src, dst)
+    visited = bytearray(n + 1)
+    postorder: list[int] = []
+    visited[S] = 1
+    stack: list[list[int]] = [[S, 0]]
+    while stack:
+        frame = stack[-1]
+        v, i = frame
+        if v == S:
+            if i < len(roots):
+                frame[1] = i + 1
+                w = roots[i]
+                if not visited[w]:
+                    visited[w] = 1
+                    stack.append([w, ptr[w]])
+                continue
+        elif i < ptr[v + 1]:
+            frame[1] = i + 1
+            w = idx[i]
+            if not visited[w]:
+                visited[w] = 1
+                stack.append([w, ptr[w]])
+            continue
+        stack.pop()
+        postorder.append(v)
+
+    po = [-1] * (n + 1)
+    for pos, v in enumerate(postorder):
+        po[v] = pos
+    # predecessors restricted to reachable nodes; the super-root precedes every root
+    rsrc = np.asarray(src, dtype=np.int64)
+    rdst = np.asarray(dst, dtype=np.int64)
+    reach = np.array([po[v] >= 0 for v in range(n)], dtype=bool) if n else np.zeros(0, dtype=bool)
+    keep = reach[rsrc] & reach[rdst] if len(rsrc) else np.zeros(0, dtype=bool)
+    pptr, pidx = csr(n, rdst[keep], rsrc[keep])
+    root_set = set(roots)
+
+    idom = [-1] * (n + 1)
+    idom[S] = S
+
+    def intersect(a: int, b: int) -> int:
+        while a != b:
+            while po[a] < po[b]:
+                a = idom[a]
+            while po[b] < po[a]:
+                b = idom[b]
+        return a
+
+    rpo = postorder[::-1]
+    changed = True
+    while changed:
+        changed = False
+        for v in rpo:
+            if v == S:
+                continue
+            new = S if v in root_set else -1
+            for k in range(pptr[v], pptr[v + 1]):
+                p = pidx[k]
+                if idom[p] != -1:
+                    new = p if new == -1 else intersect(p, new)
+            if new != idom[v]:
+                idom[v] = new
+                changed = True
+    out = np.array(idom[:n], dtype=np.int64)
+    return out, postorder
+
+
+def dominated_mass(n: int, idom: np.ndarray, postorder: list[int]) -> np.ndarray:
+    """Size of each node's dominator subtree (itself included); 0 when unreachable."""
+    size = [0] * (n + 1)
+    for v in postorder:
+        if v == n:
+            continue
+        size[v] += 1
+        parent = int(idom[v])
+        if parent >= 0:
+            size[parent] += size[v]
+    return np.array(size[:n], dtype=np.int64)
+
+
+def personalized_pagerank(
+    n: int, src: np.ndarray, dst: np.ndarray, roots: list[int], *, damping: float = 0.85, iters: int = 60
+) -> np.ndarray:
+    """PageRank whose walker restarts at the roots: 'how load-bearing is d for Main?'."""
+    rank = np.zeros(n)
+    if not n or not roots:
+        return rank
+    src = np.asarray(src, dtype=np.int64)
+    dst = np.asarray(dst, dtype=np.int64)
+    teleport = np.zeros(n)
+    teleport[roots] = 1.0 / len(roots)
+    out_deg = np.bincount(src, minlength=n).astype(np.float64) if len(src) else np.zeros(n)
+    weights = np.zeros(len(src))
+    if len(src):
+        weights = 1.0 / out_deg[src]
+    dangling = out_deg == 0
+    rank = teleport.copy()
+    for _ in range(iters):
+        contrib = np.bincount(dst, weights=rank[src] * weights, minlength=n) if len(src) else np.zeros(n)
+        new = (1 - damping) * teleport + damping * (contrib + rank[dangling].sum() * teleport)
+        if np.abs(new - rank).sum() < 1e-12:
+            rank = new
+            break
+        rank = new
+    total = rank.sum()
+    return rank / total if total else rank

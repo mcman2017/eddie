@@ -77,6 +77,10 @@ class Decl:
     has_sorry: bool
     context: str
     universe_params: str | None = None
+    # character offsets into the decoded source (in-memory only; not stored in the index)
+    start_char: int = -1
+    sig_end_char: int = -1
+    end_char: int = -1
 
 
 @dataclass
@@ -182,6 +186,11 @@ def _parse_imports(code: str) -> tuple[list[Import], int, bool]:
 
 
 def parse_source(path: str, data: bytes) -> ModuleRecord:
+    return parse_source_with_code(path, data)[0]
+
+
+def parse_source_with_code(path: str, data: bytes) -> tuple[ModuleRecord, str]:
+    """Parse, and also return the lexer's masked `code` text (comments/strings blanked)."""
     anomalies: list[str] = []
     try:
         text = data.decode("utf-8")
@@ -287,7 +296,7 @@ def parse_source(path: str, data: bytes) -> ModuleRecord:
             prefixes = []
         prev_content_end = content_end
 
-    return ModuleRecord(
+    record = ModuleRecord(
         path=path,
         sha256=hashlib.sha256(data).hexdigest(),
         bytes=len(data),
@@ -297,6 +306,7 @@ def parse_source(path: str, data: bytes) -> ModuleRecord:
         decls=decls,
         anomalies=anomalies,
     )
+    return record, code
 
 
 def _parse_decl(
@@ -381,6 +391,9 @@ def _parse_decl(
         has_sorry=has_sorry,
         context=context,
         universe_params=universe,
+        start_char=chain_start,
+        sig_end_char=sig_end,
+        end_char=content_end,
     )
 
 

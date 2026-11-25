@@ -385,6 +385,56 @@ def cmd_index_validate(args: argparse.Namespace) -> int:
     return 0
 
 
+# --- cone (declaration-level proof cone, pillars) ---------------------------------------------
+
+
+def _cone_path(args: argparse.Namespace) -> Path:
+    return Path(args.cone) if getattr(args, "cone", None) else load_settings().data_dir / "index" / "eddie_cone.sqlite"
+
+
+def cmd_cone_build(args: argparse.Namespace) -> int:
+    from eddie.ingest.cone import build_cone
+
+    settings = load_settings()
+    raw = settings.data_dir / "raw"
+    spine = Path(args.spine) if args.spine else raw / "p0" / "spine.tsv.gz"
+    pdf = Path(args.pdf) if args.pdf else raw / "pdfs" / "remark.pdf"
+    build_cone(
+        Path(args.index) if args.index else settings.index_path,
+        _cone_path(args),
+        spine_path=spine if spine.exists() else None,
+        pdf_path=pdf if pdf.exists() else None,
+        workers=args.workers,
+    )
+    return cmd_cone_stats(args)
+
+
+def cmd_cone_stats(args: argparse.Namespace) -> int:
+    from eddie.ingest.cone import cone_stats
+
+    path = _cone_path(args)
+    if not path.exists():
+        raise ConfigError(f"no cone at {path}: run `python -m eddie.cli cone build`")
+    st = cone_stats(path)
+    m = st["meta"]
+    if getattr(args, "json", False):
+        _out(json.dumps(st, indent=2))
+        return 0
+    decls, live, dead = int(m["decls"]), int(m["live"]), int(m["dead"])
+    _out(f"cone          {path}  (built {m['built_at']}, {m['timing_total_s']} s)")
+    _out(f"liveness      {live:,} live / {decls:,} decls ({100 * live / max(decls, 1):.1f}%), {dead:,} dead pruned  [oracle: {m['liveness_source']}]")
+    if m["agreement"]:
+        a = m["agreement"]
+        _out(f"graph check   our reference graph reaches {a['graph_live']:,}: precision {a['precision']:.3f}, recall {a['recall']:.3f} vs the spine")
+    _out(f"edges         {int(m['edges']):,} reference edges ({int(m['weak_edges']):,} weak), {int(m['live_edges']):,} inside the live cone; max depth {m['max_depth']}")
+    _out(f"roots         {', '.join(m['roots'])}")
+    _out(f"pillars       {m['pillars']}  (PDF timeline: {m['timeline_matched']}/{m['timeline_steps']} steps matched)")
+    for p in st["pillars"]:
+        sub = f"  ~ {p['subtitle']}" if p["subtitle"] else ""
+        _out(f"  {p['ord']:>2}. {p['title'][:52]:<52} live {p['live']:>8,}  dead {p['dead']:>7,}  depth~{(p['median_depth'] or 0):.0f}{sub[:90]}")
+    return 0
+
+
 # --- sandbox --------------------------------------------------------------------------------
 
 
@@ -484,6 +534,19 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("spine")
     p.add_argument("--index")
     p.set_defaults(func=cmd_index_validate)
+
+    cone = sub.add_parser("cone", help="declaration-level live proof cone + pillars").add_subparsers(dest="action", required=True)
+    p = cone.add_parser("build", help="reference graph, liveness, dominators, scores, pillars, zoom tree")
+    p.add_argument("--index")
+    p.add_argument("--cone")
+    p.add_argument("--spine", help="liveness oracle (default data/raw/p0/spine.tsv.gz when present)")
+    p.add_argument("--pdf", help="companion PDF for pillar titles (default data/raw/pdfs/remark.pdf)")
+    p.add_argument("--workers", type=int)
+    p.set_defaults(func=cmd_cone_build)
+    p = cone.add_parser("stats", help="liveness, graph agreement and the pillar list")
+    p.add_argument("--cone")
+    p.add_argument("--json", action="store_true")
+    p.set_defaults(func=cmd_cone_stats)
 
     sandbox = sub.add_parser("sandbox", help="guarded script runner").add_subparsers(dest="action", required=True)
     p = sandbox.add_parser("run", help="run a generated script; collect plots/audio + spectrograms + QC")
