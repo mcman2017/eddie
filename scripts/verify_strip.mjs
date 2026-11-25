@@ -138,6 +138,13 @@ async function main() {
     await sleep(name === "09-wheel" ? 900 : 150);
     await shot(name);
   }
+  // half-way through the morph: both sets of phase lines are on screen, cross-faded
+  await open("freeze=12.5&cam=dive");
+  await ready();
+  await evaluate("(() => { const el = document.querySelector('.strip-mode input'); const set = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set; set.call(el, '50'); el.dispatchEvent(new Event('input', { bubbles: true })); })()");
+  await until("Math.abs(window.__eddieStrip.state().morph - 0.5) < 0.02 && window.__eddieStrip.settled()", "the blend slider to reach the middle");
+  await sleep(150);
+  await shot("12-mid-morph");
   await open("freeze=12.5&mode=wave");
   await ready();
   const wave = await evaluate("window.__eddieStrip.state()");
