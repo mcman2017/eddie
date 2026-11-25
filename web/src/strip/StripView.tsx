@@ -292,16 +292,16 @@ export default function StripView({ active, chapter, onChapter }: Props) {
 
           <div className="strip-console">
             <div className="strip-mode" role="group" aria-label="Surface">
-              <button type="button" aria-pressed={!wave} onClick={() => goMode(false)}>
+              <button type="button" data-testid="mode-strip" aria-pressed={!wave} onClick={() => goMode(false)}>
                 Riemann critical strip
               </button>
-              <input type="range" min={0} max={100} value={Math.round(blend * 100)} aria-label="Blend between the zeta strip and the proof wave"
+              <input type="range" data-testid="blend" min={0} max={100} value={Math.round(blend * 100)} aria-label="Blend between the zeta strip and the proof wave"
                 onChange={(e) => {
                   const v = Number(e.target.value) / 100;
                   setBlend(v);
                   engineRef.current?.setMorph(v, false);
                 }} />
-              <button type="button" aria-pressed={wave} onClick={() => goMode(true)}>
+              <button type="button" data-testid="mode-wave" aria-pressed={wave} onClick={() => goMode(true)}>
                 Gödel-Fourier wave
               </button>
             </div>
@@ -311,13 +311,13 @@ export default function StripView({ active, chapter, onChapter }: Props) {
                   <span>
                     Harmonics 1 to {count} of {land.bands}
                   </span>
-                  <input type="range" min={1} max={land.bands} value={count} onChange={(e) => setBands(Number(e.target.value))}
+                  <input type="range" data-testid="bands" min={1} max={land.bands} value={count} onChange={(e) => setBands(Number(e.target.value))}
                     aria-label="Number of harmonic bands summed, from the foundations up to Main" />
                 </label>
                 <div className="segmented" role="group" aria-label="Which declarations weight the wave">
                   {([["live", `Live cone (${Math.round(land.meta.counts.live / 1000)}K)`], ["dead", `Dead code (${Math.round(land.meta.counts.dead / 1000)}K)`], ["compare", "Compare"]] as const).map(
                     ([key, label]) => (
-                      <button key={key} type="button" aria-pressed={population === key} aria-selected={population === key}
+                      <button key={key} type="button" data-testid={`pop-${key}`} aria-pressed={population === key} aria-selected={population === key}
                         onClick={() => setPopulation(key)}>
                         {label}
                       </button>
@@ -327,7 +327,7 @@ export default function StripView({ active, chapter, onChapter }: Props) {
               </div>
             )}
             <div className="strip-actions">
-              <button type="button" className="play" onClick={play} aria-pressed={playing}>
+              <button type="button" className="play" data-testid="harmonics-play" onClick={play} aria-pressed={playing}>
                 {playing ? "Stop" : "Play spectral harmonics"}
               </button>
               <button type="button" className="strip-toggle" aria-expanded={card} onClick={() => setCard((v) => !v)}>

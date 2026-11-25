@@ -992,7 +992,7 @@ export class StripEngine {
         polar: f.from.polar + (f.to.polar - f.from.polar) * e,
       });
       if (e >= 1) this.flight = null;
-    } else this.controls.update();
+    } else this.controls.update(dt || null);
 
     const u = this.terrain.material.uniforms;
     u.uMorph.value = this.morph;
@@ -1018,9 +1018,11 @@ export class StripEngine {
       document.documentElement.dataset.strip = "ready";
       (window as unknown as { __eddieStrip?: unknown }).__eddieStrip = this.debug();
     }
-    // keep going while anything can still move; a frozen or reduced-motion view draws on demand
+    // Keep going while anything can still move; a frozen or reduced-motion view draws on demand.
+    // The next frame is requested directly: kick() restarts the clock for a view waking from idle,
+    // and going through it here would make every frame's dt zero.
     const moving = this.flight || this.tour || mixing || this.morphStart >= 0 || this.waveDirty || this.marksDirty;
-    if (!this.still || moving) this.kick();
+    if ((!this.still || moving) && !document.hidden) this.raf = requestAnimationFrame(this.tick);
   };
 
   private fade(points: Points<BufferGeometry, ShaderMaterial>, count: number, level: number, pulses: Float32Array, dt: number): void {
@@ -1067,7 +1069,7 @@ export class StripEngine {
       settled: () => !this.flight && !this.tour && this.morphStart < 0 && !this.waveDirty && !this.marksDirty && this.pop === this.popTarget
         && this.bands.every((b, i) => b === this.bandTarget[i]),
       state: () => ({
-        morph: this.morph, bands: this.bandCount, pop: this.popTarget, compare: this.compare, selected: this.selected,
+        morph: this.morph, bands: this.bandCount, pop: this.popTarget, popLevel: this.pop, compare: this.compare, selected: this.selected,
         zeros: this.currentZeros().length, frames: this.frames, camera: this.camera.position.toArray().map((v) => +v.toFixed(3)),
         renderer: this.renderer.info.render, pixelRatio: this.renderer.getPixelRatio(),
       }),

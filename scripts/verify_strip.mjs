@@ -141,7 +141,7 @@ async function main() {
   // half-way through the morph: both sets of phase lines are on screen, cross-faded
   await open("freeze=12.5&cam=dive");
   await ready();
-  await evaluate("(() => { const el = document.querySelector('.strip-mode input'); const set = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set; set.call(el, '50'); el.dispatchEvent(new Event('input', { bubbles: true })); })()");
+  await evaluate("(() => { const el = document.querySelector('[data-testid=blend]'); const set = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set; set.call(el, '50'); el.dispatchEvent(new Event('input', { bubbles: true })); })()");
   await until("Math.abs(window.__eddieStrip.state().morph - 0.5) < 0.02 && window.__eddieStrip.settled()", "the blend slider to reach the middle");
   await sleep(150);
   await shot("12-mid-morph");
@@ -180,16 +180,24 @@ async function main() {
   await shot("11-chapter-after-click");
 
   // 5) the synth and the tour run from their buttons
-  check(await click(".strip-actions .play"), "clicked Play spectral harmonics");
+  check(await click("[data-testid=harmonics-play]"), "clicked Play spectral harmonics");
   await until("/Zero 1 of 12: t = 14\\.1347, sounding at 372 Hz/.test(document.querySelector('.strip-hud')?.textContent ?? '')", "the first zero to sound at its mapped pitch");
   await until("/Zero 2 of 12/.test(document.querySelector('.strip-hud')?.textContent ?? '')", "the second partial to enter");
-  check(await click(".strip-actions .play"), "stopped the chord");
+  check(await click("[data-testid=harmonics-play]"), "stopped the chord");
   check(await click(".strip-cams button:nth-child(4)"), "started the tour");
   await until(`document.querySelector('[data-testid=chapter-guide]')?.dataset.slug === ${JSON.stringify(chapters[0][0])}`, "the tour to open chapter 1");
   await until(`document.querySelector('[data-testid=chapter-guide]')?.dataset.slug === ${JSON.stringify(chapters[1][0])}`, "the tour to move on to chapter 2");
   check(await click(".strip-cams button:nth-child(4)"), "stopped the tour");
 
-  // 6) frame pacing (software GL here: an upper bound on trouble, not a prediction)
+  // 6) live cross-fades. Every screenshot above is a frozen frame, where state is assigned
+  //    directly; on a running clock the surface has to travel to the dead population by itself.
+  await open("mode=wave");
+  await ready();
+  check(await click("[data-testid=pop-dead]"), "clicked Dead code on a running page");
+  await until("window.__eddieStrip.state().popLevel === 1 && window.__eddieStrip.settled()", "the surface to reach the dead population");
+  check((await evaluate("window.__eddieStrip.state().popLevel")) === 1, "the live cross-fade to the dead wave completes");
+
+  // 7) frame pacing (software GL here: an upper bound on trouble, not a prediction)
   const frames = await evaluate("new Promise((done) => { const t = []; const step = (now) => { t.push(now); if (t.length < 90) requestAnimationFrame(step); else { const d = t.slice(1).map((v, i) => v - t[i]).sort((a, b) => a - b); done({ median: d[Math.floor(d.length / 2)], p95: d[Math.floor(d.length * 0.95)] }); } }; requestAnimationFrame(step); })");
   console.log(`note frame time on ${gl}: median ${frames.median.toFixed(1)} ms, p95 ${frames.p95.toFixed(1)} ms`);
 
