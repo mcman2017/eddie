@@ -169,6 +169,7 @@ export function ProofMap({ overview, selected, reveal, initialNode, onSelect }: 
   };
   const seedOnly = (overview.artifact_sources?.seed ?? 0) > 0 && !(overview.artifact_sources?.ember ?? 0);
   const wrapWidth = wrapRef.current?.clientWidth ?? 0;
+  const wrapHeight = wrapRef.current?.clientHeight ?? 0;
 
   return (
     <section className="map" ref={wrapRef} aria-label="Proof map">
@@ -217,7 +218,9 @@ export function ProofMap({ overview, selected, reveal, initialNode, onSelect }: 
         </p>
       </div>
       <p className="map-hint">Scroll to zoom, drag to pan, click a part to enter it, Esc to step out</p>
-      {hover && <Tooltip node={hover.node} x={hover.x} y={hover.y} flip={hover.x > wrapWidth - 360} />}
+      {hover && (
+        <Tooltip node={hover.node} x={hover.x} y={hover.y} flipX={hover.x > wrapWidth - 360} flipY={hover.y > wrapHeight - 150} />
+      )}
       {error && (
         <p className="map-error" role="alert">
           {error.includes("cone not built")
@@ -229,7 +232,7 @@ export function ProofMap({ overview, selected, reveal, initialNode, onSelect }: 
   );
 }
 
-function Tooltip({ node, x, y, flip }: { node: VNode; x: number; y: number; flip: boolean }) {
+function Tooltip({ node, x, y, flipX, flipY }: { node: VNode; x: number; y: number; flipX: boolean; flipY: boolean }) {
   const lines: string[] = [];
   let title = node.label;
   if (node.kind === "decl") {
@@ -245,7 +248,15 @@ function Tooltip({ node, x, y, flip }: { node: VNode; x: number; y: number; flip
     if (node.triaged) lines.push(`${node.triaged.toLocaleString()} triaged`);
   }
   return (
-    <div className={`tooltip ${flip ? "tooltip-flip" : ""}`} style={{ left: x, top: y }} role="status">
+    <div
+      className="tooltip"
+      style={{
+        left: x,
+        top: y,
+        transform: `translate(${flipX ? "calc(-100% - 16px)" : "16px"}, ${flipY ? "calc(-100% - 16px)" : "16px"})`,
+      }}
+      role="status"
+    >
       <strong>{title}</strong>
       {lines.map((l) => (
         <span key={l}>{l}</span>

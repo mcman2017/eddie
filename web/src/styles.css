@@ -399,11 +399,6 @@ pre {
   font-size: 14px;
   color: var(--ink-2);
   pointer-events: none;
-  transform: translate(16px, 16px);
-}
-
-.tooltip-flip {
-  transform: translate(calc(-100% - 16px), 16px);
 }
 
 .tooltip strong {
