@@ -1,136 +1,68 @@
-import { useEffect, useState } from "react";
-import { api, type BudgetSnapshot, type IndexStats, type SearchHit } from "./api";
-import { BudgetGauge } from "./BudgetGauge";
+import { useCallback, useEffect, useState } from "react";
+import { api, type Overview } from "./api";
+import { Inspector } from "./Inspector";
+import { ProofMap } from "./ProofMap";
+import { TopBar } from "./TopBar";
 
-const usd = (v: number | undefined, places = 4) => (v === undefined ? "—" : `$${v.toFixed(places)}`);
-const n = (v: number | undefined) => (v === undefined ? "—" : v.toLocaleString());
-
-function useBudget(pollMs = 5000) {
-  const [snapshot, setSnapshot] = useState<BudgetSnapshot | null>(null);
-  useEffect(() => {
-    let live = true;
-    const tick = () => api.budget().then((b) => live && setSnapshot(b)).catch(() => live && setSnapshot({ available: false }));
-    tick();
-    const id = window.setInterval(tick, pollMs);
-    return () => {
-      live = false;
-      window.clearInterval(id);
-    };
-  }, [pollMs]);
-  return snapshot;
-}
-
-function Governor() {
-  const b = useBudget();
-  const breakerOpen = b?.breaker?.state === "open" || b?.kill_switch;
-  return (
-    <section className="card">
-      <header className="card-head">
-        <h2>Metabolic Spend Governor</h2>
-        <span className={`pill ${breakerOpen ? "pill-danger" : "pill-ok"}`}>{breakerOpen ? "breaker OPEN" : "armed"}</span>
-      </header>
-      <div className="gauge-row">
-        <BudgetGauge snapshot={b} />
-        <dl className="facts">
-          <dt>committed</dt>
-          <dd>{usd(b?.committed_usd)}</dd>
-          <dt>in-flight worst case</dt>
-          <dd>{usd(b?.inflight_worst_case_usd)}</dd>
-          <dt>headroom</dt>
-          <dd>{usd(b?.headroom_usd)}</dd>
-          <dt>rolling 24 h</dt>
-          <dd>
-            {usd(b?.daily_committed_usd)} / {usd(b?.daily_cap_usd, 2)}
-          </dd>
-          <dt>per-run cap</dt>
-          <dd>{usd(b?.run_cap_usd, 2)}</dd>
-        </dl>
-      </div>
-      {b?.breaker?.reason && <p className="warn">breaker: {b.breaker.reason}</p>}
-    </section>
-  );
-}
-
-function IndexPanel() {
-  const [stats, setStats] = useState<IndexStats | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [q, setQ] = useState("riemannHypothesis");
-  const [hits, setHits] = useState<SearchHit[]>([]);
-
-  useEffect(() => {
-    api.stats().then(setStats).catch((e: Error) => setError(e.message));
-  }, []);
-
-  useEffect(() => {
-    const term = q.trim();
-    if (!term) return setHits([]);
-    const id = window.setTimeout(() => {
-      api.search(term).then((r) => setHits(r.results)).catch(() => setHits([]));
-    }, 180);
-    return () => window.clearTimeout(id);
-  }, [q]);
-
-  const f = stats?.forecast_r1_all_signatures;
-  return (
-    <section className="card">
-      <header className="card-head">
-        <h2>Structural Index</h2>
-        <span className="pill">$0 · local</span>
-      </header>
-      {error && <p className="warn">{error}</p>}
-      <div className="stat-grid">
-        <div>
-          <b>{n(stats?.modules)}</b>
-          <span>modules</span>
-        </div>
-        <div>
-          <b>{n(stats?.decls)}</b>
-          <span>declarations</span>
-        </div>
-        <div>
-          <b>{n(stats?.source_lines)}</b>
-          <span>lines of Lean</span>
-        </div>
-        <div>
-          <b>{stats ? stats.sorry_count : "—"}</b>
-          <span>sorry</span>
-        </div>
-      </div>
-      {f && (
-        <p className="forecast">
-          One Ember triage pass over every signature would cost <b>~{usd(f.total_usd_typical, 2)}</b>, so the
-          index decides what Ember ever sees.
-        </p>
-      )}
-      <input className="search" value={q} onChange={(e) => setQ(e.target.value)} placeholder="search theorems, lemmas, defs…" spellCheck={false} />
-      <ol className="hits">
-        {hits.map((h) => (
-          <li key={h.id}>
-            <div className="hit-head">
-              <span className={`kind kind-${h.kind}`}>{h.kind}</span>
-              <code className="name">{h.full_name ?? "(anonymous)"}</code>
-              <span className="module">{h.module}</span>
-            </div>
-            <pre className="sig">{h.signature}</pre>
-          </li>
-        ))}
-      </ol>
-    </section>
-  );
+/** Deep links: #decl=<id> opens a declaration, #node=<id> frames a part of the map. */
+function readHash(): { decl: number | null; node: number | null } {
+  const params = new URLSearchParams(window.location.hash.slice(1));
+  const num = (k: string) => {
+    const v = Number(params.get(k));
+    return params.has(k) && Number.isInteger(v) && v >= 0 ? v : null;
+  };
+  return { decl: num("decl"), node: num("node") };
 }
 
 export function App() {
+  const [overview, setOverview] = useState<Overview | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [selected, setSelected] = useState<number | null>(null);
+  const [reveal, setReveal] = useState<{ declId: number; nonce: number; instant?: boolean } | null>(null);
+  const [initialNode, setInitialNode] = useState<number | null>(null);
+
+  useEffect(() => {
+    api
+      .overview()
+      .then((o) => {
+        setOverview(o);
+        const hash = readHash();
+        if (hash.decl != null) {
+          setSelected(hash.decl);
+          if (hash.node == null) setReveal({ declId: hash.decl, nonce: 1, instant: true });
+        } else if (o.roots.length) setSelected(o.roots[0].id);
+        if (hash.node != null) setInitialNode(hash.node);
+      })
+      .catch((e: Error) => setError(e.message));
+  }, []);
+
+  const select = useCallback((declId: number, fly: boolean) => {
+    setSelected(declId);
+    if (fly) setReveal({ declId, nonce: performance.now() });
+  }, []);
+
+  useEffect(() => {
+    if (selected != null) window.history.replaceState(null, "", `#decl=${selected}`);
+  }, [selected]);
+
   return (
-    <div className="shell">
-      <header className="masthead">
-        <h1>
-          EDDIE<span className="dot">·</span>
-        </h1>
-        <p>a 4-region proof decompiler · Lean 4 → sight, sound &amp; intuition · on Meta Muse Ember</p>
-      </header>
-      <main className="grid">
-        <Governor />
-        <IndexPanel />
+    <div className="app">
+      <TopBar overview={overview} />
+      <main className="stage">
+        {overview ? (
+          <ProofMap overview={overview} selected={selected} reveal={reveal} initialNode={initialNode} onSelect={select} />
+        ) : (
+          <section className="map map-empty">
+            <p>
+              {error
+                ? error.includes("503")
+                  ? "Eddie has no proof map yet. Build the index and the cone (python -m eddie.cli cone build), then reload."
+                  : `The API did not answer: ${error}. Start it with make api.`
+                : "Loading the proof map…"}
+            </p>
+          </section>
+        )}
+        <Inspector declId={selected} onSelect={select} />
       </main>
     </div>
   );

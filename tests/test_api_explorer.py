@@ -48,7 +48,17 @@ def world(tmp_path_factory):
     store.put_intuition("riemannHypothesis", "SEED: placeholder", source="seed")
     store.put_triage("Development.Spectral.Trace.critical_line_of_trace", "SEED gloss", source="seed")
     store.set_activity("R2.critic", decl_full_name="riemannHypothesis", message="reviewing")
-    return {"index": index, "cone": cone, "art_dir": art_dir, "db": store.path, "sha": sha}
+    con = sqlite3.connect(index)
+    ids = dict(con.execute("SELECT full_name, id FROM decls WHERE full_name IS NOT NULL").fetchall())
+    con.close()
+    other = next(i for n, i in ids.items() if n != "riemannHypothesis")
+    store.replace_pending_plan("plan1", [
+        {"seq": 1, "tier": 2, "kind": "triage_batch", "payload": {"decl_ids": [other]}, "reserve_nano": 5,
+         "expected_nano": 2, "scheduled_day": "2026-11-25"},
+        {"seq": 2, "tier": 3, "kind": "milestone", "decl_full_name": "riemannHypothesis", "decl_id": ids["riemannHypothesis"],
+         "payload": {}, "reserve_nano": 9, "expected_nano": 4, "scheduled_day": "2026-11-26"},
+    ])
+    return {"index": index, "cone": cone, "art_dir": art_dir, "db": store.path, "sha": sha, "other": other}
 
 
 @pytest.fixture
@@ -119,3 +129,38 @@ def test_explorer_opens_databases_read_only(client, world):
     client.get("/api/overview")
     client.get("/api/map/node/0")
     assert world["db"].stat().st_mtime_ns == before
+
+
+def test_overview_reports_where_artifacts_came_from(client):
+    assert client.get("/api/overview").json()["artifact_sources"] == {"seed": 2}
+
+
+def test_plan_membership_is_shown_per_declaration(client, world):
+    o = client.get("/api/overview").json()
+    rh = client.get(f"/api/decl/{o['roots'][0]['id']}").json()
+    assert rh["planned"] == {"tier": 3, "kind": "milestone", "scheduled_day": "2026-11-26", "status": "pending"}
+    other = client.get(f"/api/decl/{world['other']}").json()
+    assert other["planned"]["kind"] == "triage_batch" and other["planned"]["scheduled_day"] == "2026-11-25"
+
+
+def test_include_returns_a_child_beyond_the_limit(client):
+    root = client.get("/api/map/node/0").json()
+    for pillar in root["children"]:
+        kids = client.get(f"/api/map/node/{pillar['id']}").json()["children"]
+        if len(kids) > 1:
+            last = kids[-1]["id"]
+            page = client.get(f"/api/map/node/{pillar['id']}", params={"limit": 1, "include": last}).json()
+            assert [c["id"] for c in page["children"]] == [kids[0]["id"], last]
+            assert (page["more"] or {"count": 0})["count"] == len(kids) - 2
+            return
+    pytest.fail("no pillar with two children in the synthetic tree")
+
+
+def test_dominator_link_points_at_a_real_declaration(client):
+    o = client.get("/api/overview").json()
+    rh = client.get(f"/api/decl/{o['roots'][0]['id']}").json()
+    assert rh["metrics"]["dominator_id"] is None  # a root is dominated only by Main itself
+    used = client.get(f"/api/decl/{o['roots'][0]['id']}/neighbors").json()["uses"][0]
+    child = client.get(f"/api/decl/{used['id']}").json()
+    if child["metrics"]["dominator_id"] is not None:
+        assert client.get(f"/api/decl/{child['metrics']['dominator_id']}").status_code == 200

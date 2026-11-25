@@ -27,6 +27,7 @@ from typing import Any
 import numpy as np
 
 from eddie.ingest import graph as g
+from eddie.ingest import treegroups as tg
 from eddie.ingest.lean_parser import PARSER_VERSION
 from eddie.ingest.refgraph import init_worker, module_edges
 from eddie.planner import pillars as pl
@@ -439,6 +440,27 @@ def _write_tree(con, specs, ordering, modules, module_pillar_list, live_pm, tota
         leaf["decls"] = int(total_pm[mid])
         leaf["live"] = int(live_pm[mid])
         leaf["top"] = best_by_module.get(mid, (0.0, None))
+
+    # bounded fan-out: wide directories get synthetic name-prefix / alphabetical-range groups
+    for parent in list(children):
+        kids = children[parent]
+        if len(kids) <= tg.FANOUT:
+            continue
+        plan = tg.plan_groups([(k, nodes[k]["label"]) for k in kids], tg.FANOUT)
+        children[parent] = []
+        base = nodes[parent]
+
+        def attach(entries: list, parent_key: tuple, trail: tuple, base: dict = base) -> None:
+            for e in entries:
+                if isinstance(e, tg.Group):
+                    gkey = (*parent_key, "g", *trail, e.label)
+                    ensure(gkey, parent_key, "group", e.label, base["path"], base["pillar"])
+                    attach(e.members, gkey, (*trail, e.label))
+                else:
+                    nodes[e]["parent"] = parent_key
+                    children[parent_key].append(e)
+
+        attach(plan, parent, ())
 
     # breadth-first ids (parents before children), children sorted by live mass
     order: list[tuple] = []

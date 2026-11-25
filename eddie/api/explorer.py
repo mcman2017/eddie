@@ -135,7 +135,9 @@ def create_router() -> APIRouter:
                     })
                 cross = con.execute("SELECT source, target, weight FROM pillar_edges ORDER BY weight DESC LIMIT 60").fetchall()
                 featured = []
+                sources: dict[str, int] = {}
                 if data.has_artifacts():
+                    sources = dict(con.execute("SELECT source, COUNT(*) FROM art.witnesses GROUP BY source").fetchall())
                     featured = [
                         {"decl_id": r[0], "full_name": r[1], "kinds": (r[2] or "").split(","), "statuses": (r[3] or "").split(",")}
                         for r in con.execute(
@@ -169,13 +171,18 @@ def create_router() -> APIRouter:
                 "pillars": pillars,
                 "cross_pillar_edges": [{"source": r[0], "target": r[1], "weight": r[2]} for r in cross],
                 "featured": featured,
+                "artifact_sources": sources,
                 "plan": plan,
             }
 
         return data.cached("overview", data._mtime(data.cone, data.artifacts_db, data.plan), build)
 
     @router.get("/map/node/{node_id}")
-    def map_node(node_id: int, limit: int = Query(160, ge=1, le=400)) -> dict[str, Any]:
+    def map_node(
+        node_id: int,
+        limit: int = Query(160, ge=1, le=400),
+        include: int | None = Query(None, ge=0, description="a child node id (or a decl id under a module) that must be returned"),
+    ) -> dict[str, Any]:
         with data.cone_con() as con:
             node = con.execute("SELECT * FROM tree_nodes WHERE id = ?", (node_id,)).fetchone()
             if node is None:
@@ -197,12 +204,13 @@ def create_router() -> APIRouter:
 
             if node["kind"] == "module":
                 statuses = data.status_by_decl(con)
-                rows = con.execute(
+                decl_sql = (
                     "SELECT d.id, d.kind, d.name, d.full_name, d.start_line, m.live, m.score, m.is_root, m.dom_mass "
                     "FROM idx.decls d JOIN decl_metrics m ON m.decl_id = d.id WHERE d.module_id = ? "
-                    "ORDER BY m.live DESC, m.score DESC, d.id LIMIT ?",
-                    (node["module_id"], limit),
-                ).fetchall()
+                )
+                rows = con.execute(decl_sql + "ORDER BY m.live DESC, m.score DESC, d.id LIMIT ?", (node["module_id"], limit)).fetchall()
+                if include is not None and all(r["id"] != include for r in rows):
+                    rows += con.execute(decl_sql + "AND d.id = ?", (node["module_id"], include)).fetchall()
                 children = [
                     {"id": f"d{r['id']}", "decl_id": r["id"], "kind": "decl", "decl_kind": r["kind"],
                      "label": (r["name"] or r["kind"]).rsplit(".", 1)[-1], "full_name": r["full_name"],
@@ -218,6 +226,8 @@ def create_router() -> APIRouter:
                     else "ORDER BY t.live DESC, t.label"
                 )
                 rows = con.execute(f"SELECT * FROM tree_nodes t WHERE t.parent_id = ? {order} LIMIT ?", (node_id, limit)).fetchall()
+                if include is not None and all(r["id"] != include for r in rows):
+                    rows += con.execute("SELECT * FROM tree_nodes t WHERE t.id = ? AND t.parent_id = ?", (include, node_id)).fetchall()
                 children = [pack(r) for r in rows]
                 total = con.execute("SELECT COUNT(*) FROM tree_nodes WHERE parent_id = ?", (node_id,)).fetchone()[0]
             more = None
@@ -242,9 +252,11 @@ def create_router() -> APIRouter:
             if r is None:
                 raise HTTPException(404, "no such declaration")
             idom_name = None
+            idom_id = None
             if r["idom"] and r["idom"] > 0:
                 row = con.execute("SELECT full_name FROM idx.decls WHERE id = ?", (r["idom"],)).fetchone()
                 idom_name = row[0] if row else "Main"
+                idom_id = r["idom"] if row else None
             out: dict[str, Any] = {
                 "id": r["id"], "kind": r["kind"], "name": r["name"], "full_name": r["full_name"], "namespace": r["namespace"],
                 "signature": r["signature"], "docstring": r["docstring"], "context": r["context"], "attributes": r["attributes"],
@@ -252,13 +264,26 @@ def create_router() -> APIRouter:
                 "citation": {"module": r["module"], "path": f"src/{r['path']}", "start_line": r["start_line"], "end_line": r["end_line"]},
                 "metrics": {"live": bool(r["live"]), "reached_by_graph": bool(r["live_graph"]), "depth": r["depth"],
                             "fan_in": r["fan_in"], "fan_out": r["fan_out"], "ppr": r["ppr"], "dom_mass": r["dom_mass"],
-                            "dominator": idom_name, "bridge": r["bridge"], "score": r["score"], "pillar_rank": r["pillar_rank"],
+                            "dominator": idom_name, "dominator_id": idom_id, "bridge": r["bridge"], "score": r["score"], "pillar_rank": r["pillar_rank"],
                             "is_root": bool(r["is_root"])},
                 "pillar": {"id": r["pillar_id"], "title": r["pillar_title"], "slug": r["pillar_slug"]},
                 "node_id": r["node_id"],
                 "status": data.status_by_decl(con).get(decl_id, "live" if r["live"] else "dead"),
                 "triage": None, "intuition": None, "witnesses": [], "reviews": [],
             }
+            out["planned"] = None
+            if data.has_artifacts():
+                w = con.execute(
+                    "SELECT tier, kind, scheduled_day, status FROM art.work_items WHERE decl_id = ? ORDER BY seq LIMIT 1",
+                    (decl_id,),
+                ).fetchone()
+                if w is None:
+                    w = con.execute(
+                        "SELECT w.tier, w.kind, w.scheduled_day, w.status FROM art.work_items w, "
+                        "json_each(w.payload, '$.decl_ids') j WHERE w.kind = 'triage_batch' AND j.value = ? LIMIT 1",
+                        (decl_id,),
+                    ).fetchone()
+                out["planned"] = dict(w) if w else None
             if data.has_artifacts() and r["full_name"]:
                 fn = r["full_name"]
                 t = con.execute("SELECT gloss, source FROM art.triage WHERE decl_full_name = ?", (fn,)).fetchone()

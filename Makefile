@@ -1,7 +1,7 @@
 UV ?= uv
 PY := $(UV) run python
 
-.PHONY: setup test lint fmt hygiene sample fetch index stats dev api web web-build docker compose-up compose-down k8s-validate
+.PHONY: setup test lint fmt hygiene sample fetch index stats cone plan seed dev api web web-build docker compose-up compose-down k8s-validate
 
 setup: ## install Python deps into .venv and web deps into web/node_modules
 	$(UV) sync
@@ -31,6 +31,21 @@ index: ## build the $0 structural index from the extracted archive
 
 stats:
 	$(PY) -m eddie.cli index stats
+
+cone: ## $0 declaration graph, live proof cone, pillars and zoom tree (needs the index)
+	$(PY) -m eddie.cli cone build
+
+plan: ## exact tiered Ember work plan inside $$6.50 ($0: no model calls)
+	$(PY) -m eddie.cli plan-budget --target-usd 6.50
+
+seed: ## $0 sandbox witnesses for the explorer, labeled seed (never Ember output)
+	$(PY) -m eddie.cli seed-demo
+
+dev: ## API on 127.0.0.1:8765 + Vite on 127.0.0.1:5173; Ctrl-C stops both
+	@trap 'kill 0' INT TERM EXIT; \
+	$(UV) run uvicorn eddie.api.app:app --host 127.0.0.1 --port 8765 & \
+	npm --prefix web run dev & \
+	wait
 
 api: ## read-only API on 127.0.0.1:8765
 	$(UV) run uvicorn eddie.api.app:app --host 127.0.0.1 --port 8765
