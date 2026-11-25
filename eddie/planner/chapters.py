@@ -16,7 +16,8 @@ import sqlite3
 from typing import Any
 
 STUB_BADGE = "$0 Structural Stub — Ready for R4 Muse Ember"
-TIER_LABEL = {"foundations": "Foundations", "machinery": "Intermediate machinery", "bottleneck": "Bottleneck", "main": "Main"}
+TIER_LABEL = {"foundations": "Foundations", "machinery": "Machinery", "bottleneck": "Bottleneck", "main": "Summit"}
+ACT = {"foundations": "Act I", "machinery": "Act II", "bottleneck": "Act III", "main": "Act IV"}
 SIGNATURE_CHARS = 600
 BOTTLENECK_KINDS = ("theorem", "lemma")
 
@@ -124,7 +125,7 @@ def stub_markdown(facts: dict[str, Any]) -> str:
     lines = [STUB_BADGE, ""]
     dead = f", and {f['dead']:,} more that the proof never uses" if f["dead"] else ""
     lines.append(
-        f"**Chapter {f['chapter']} of {f['chapters']}, {f['tier_label'].lower()}.** {name} holds {f['live']:,} live "
+        f"**Chapter {f['chapter']} of {f['chapters']}, in {ACT.get(f['tier'], 'the proof')} ({f['tier_label'].lower()}).** {name} holds {f['live']:,} live "
         f"declarations in {f['modules']:,} modules{dead}."
     )
     lines.append("")
@@ -144,12 +145,12 @@ def stub_markdown(facts: dict[str, Any]) -> str:
         lines += ["", "**Final theorems.** What the whole archive proves:", ""]
         lines += [f"- `{t['full_name']}`" for t in f["final_theorems"]]
     if f["bottlenecks"]:
-        lines += ["", "**Bottleneck theorems.** Every path from Main to the stated number of declarations passes through each:", ""]
+        lines += ["", "**Chokepoints.** Every route from the final theorem to the stated number of declarations runs through each:", ""]
         for b in f["bottlenecks"]:
             lines.append(f"- `{b['full_name']}` gates {max(b['dom_mass'] - 1, 0):,} declarations "
                          f"({100 * b['dom_share']:.1f}% of the live proof)")
     if f["remark_steps"]:
-        lines += ["", "**Companion remark (keyword match):** " + "; ".join(
+        lines += ["", "**Authors' summary PDF (keyword match):** " + "; ".join(
             f"step {s['number']}, {s['phrase']}" for s in f["remark_steps"]) + "."]
     lines += ["", "The R4 consolidator will replace this stub with a synthesis of the chapter's verified milestones."]
     return "\n".join(lines)

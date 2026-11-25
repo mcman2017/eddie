@@ -870,6 +870,8 @@ def build_landscape(index_path: Path, cone_path: Path, out_dir: Path, params: Pa
     os.replace(out_dir / "classes.tsv.gz.tmp", out_dir / "classes.tsv.gz")
 
     findings = _findings(data, pops, observed, surrogate, ensemble_rows, zeros, scale, sig, p)
+    gate = gate_record(data, layout)
+    summary = takeaway(data, pops, findings, gate)
     build = {"built_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"), "seconds": round(time.time() - t0, 1),
              "cone_built_at": data["meta"].get("built_at")}
     logabs = np.log(np.abs(zeta[np.isfinite(zeta)]))
@@ -897,10 +899,13 @@ def build_landscape(index_path: Path, cone_path: Path, out_dir: Path, params: Pa
                       "sigma": c["sigma"], "t": c["t"], "side": c["side"], "live": c["live"], "dead": c["dead"]} for c in layout],
         "arcs": arcs,
         "findings": findings,
+        "gate": gate,
+        "takeaway": summary,
     }
     _write_atomic(out_dir / "landscape.json", _json(landscape))
     _write_atomic(out_dir / "findings.json", _json({
         "schema": "eddie-findings/1", "build_id": build_id, "encoding": ENCODING, "findings": findings,
+        "gate": gate, "takeaway": summary,
         "observed_window": observed, "surrogates": surrogate, "encodings": ensemble_rows,
         "size_matched": findings_extra(sig, p),
     }))
@@ -914,10 +919,52 @@ def findings_extra(sig: Signatures, p: Params) -> dict[str, Any]:
     return size_matched(sig, p.subsamples)
 
 
+def gate_record(data: dict[str, Any], layout: list[dict[str, Any]]) -> dict[str, Any] | None:
+    """The theorem that dominates the most of the live proof, and the chapter it lives in."""
+    gate = data["gate"]
+    if not gate or not data["live_total"]:
+        return None
+    home = next((c for c in layout if c["id"] == gate["pillar_id"]), None)
+    return {"full_name": gate["full_name"], "dom_mass": int(gate["dom_mass"]),
+            "share": _round(100.0 * gate["dom_mass"] / data["live_total"], 4),
+            "chapter": home["flow_ord"] + 1 if home else None, "slug": home["slug"] if home else None}
+
+
+def _thousands(n: int) -> str:
+    return f"{round(n / 1000):,}K" if n >= 10_000 else f"{n:,}"
+
+
+def takeaway(data: dict[str, Any], pops: dict[str, Any], findings: list[dict[str, Any]], gate: dict[str, Any] | None) -> str | None:
+    """One plain sentence for the findings card, assembled only from what the numbers support.
+
+    Each clause is dropped or reworded when its number does not back it: the wave comparison is
+    stated only when the live-vs-dead finding is stable, in whichever direction it came out, and
+    the gate is named only when one was found. It never calls a dip of the wave a bottleneck.
+    """
+    live_n, dead_n = int(data["live_total"]), int(data["dead_total"])
+    if not live_n or not dead_n:
+        return None
+    share = dead_n / (live_n + dead_n)
+    spoken = {2: "One in two", 3: "One in three", 4: "One in four", 5: "One in five"}
+    k = next((k for k in spoken if abs(share - 1 / k) < 0.02), None)
+    lead = (f"{spoken[k]} declarations ({_thousands(dead_n)}, grey) is" if k
+            else f"{share:.0%} of declarations ({_thousands(dead_n)}, grey) are") + " never used by the final theorem"
+    versus = next((f for f in findings if f["id"] == "live-vs-dead"), None)
+    ls, dsx = pops["live"]["stats"], pops["dead"]["stats"]
+    kind = "are the live proof"
+    if versus and versus["status"] == "stable" and ls.get("n1") and dsx.get("n1") and ls["n1"] != dsx["n1"]:
+        kind = "make the richer wave" if ls["n1"] > dsx["n1"] else "make the more concentrated wave"
+    rest = f"the {_thousands(live_n)} that are (colour) {kind}"
+    if gate:
+        return f"{lead}; {rest}, and a single theorem gates {gate['share']:.1f}% of them."
+    return f"{lead}; {rest}."
+
+
 def _findings(data, pops, observed, surrogate, ensemble, zeros, scale, sig: Signatures, p: Params) -> list[dict[str, Any]]:
-    """Plain statements generated from the numbers. Each says how far it can be trusted:
-    `exact` (a property of the graph), `stable` (holds across the encoding ensemble),
-    `encoding-specific` (a landmark of this numbering only) or `null` (a negative result)."""
+    """Plain statements generated from the numbers, written for engineers rather than number
+    theorists. Each says how far it can be trusted: `exact` (a property of the graph), `stable`
+    (holds however the proof is numbered), `encoding-specific` (a landmark of this numbering
+    only) or `null` (a negative result)."""
     out: list[dict[str, Any]] = []
     live, dead = pops["live"], pops["dead"]
     gate = data["gate"]
@@ -925,44 +972,50 @@ def _findings(data, pops, observed, surrogate, ensemble, zeros, scale, sig: Sign
         share = 100.0 * gate["dom_mass"] / data["live_total"]
         out.append({"id": "bottleneck", "status": "exact",
                     "headline": f"One theorem gates {share:.1f}% of the live proof",
-                    "detail": f"Every path from Main to {gate['dom_mass']:,} of the {data['live_total']:,} live declarations passes through "
-                              f"`{gate['full_name']}`. Bottlenecks are measured this way, by dominators, not by the wave."})
+                    "detail": f"Every route from the final theorem to {gate['dom_mass']:,} of the {data['live_total']:,} live declarations "
+                              f"runs through `{gate['full_name']}`. This is how a bottleneck is measured here: on the dependency "
+                              "graph (dominators), never read off the wave."})
     if live["stats"]["present"]:
         zl = live["zeros_by_band"][-1]
         near = sum(1 for z in zl if abs(z["sigma"] - 0.5) <= NEAR_LINE)
         enc = [r["live"]["zeros"] for r in ensemble]
-        enc_txt = f" Across {len(enc)} other encodings the count runs from {min(enc)} to {max(enc)}." if enc else ""
+        enc_txt = f" Number the proof {len(enc)} other ways and the count runs from {min(enc)} to {max(enc)}." if enc else ""
         sur = surrogate.get("live", {}).get("zeros")
         sur_txt = ""
         if sur:
             edge = " (this window is above all but a few of them)" if sur["rank"] >= 0.975 else (
                 " (this window is below all but a few of them)" if sur["rank"] <= 0.025 else "")
-            sur_txt = f" Random surrogates of the same series give {sur['mean']:.1f} ± {sur['sd']:.1f}{edge}."
+            sur_txt = f" Shuffled stand-ins for the same wave give {sur['mean']:.1f} ± {sur['sd']:.1f}{edge}."
         spread = (f"from σ = {min(z['sigma'] for z in zl):.2f} to {max(z['sigma'] for z in zl):.2f}, {near} within {NEAR_LINE} of the line"
                   if zl else "none in this window")
         out.append({"id": "scatter", "status": "stable" if enc and min(enc) > 0 else "encoding-specific",
-                    "headline": f"ζ keeps all {len(zeros)} zeros on the line; the proof wave scatters its {len(zl)}",
-                    "detail": f"In the box t ≤ {p.t_max:g} the live wave has {len(zl)} zeros, {spread}.{enc_txt}{sur_txt} "
-                              "Where each one sits depends on the numbering; that they do not line up does not."})
+                    "headline": f"ζ keeps all {len(zeros)} zeros on one line; the proof wave scatters its {len(zl)}",
+                    "detail": f"Up to t = {p.t_max:g} the live wave has {len(zl)} zeros, {spread}.{enc_txt}{sur_txt} "
+                              "Where each one sits depends on the numbering. That they do not line up does not."})
     if live["stats"]["present"] and dead["stats"].get("present"):
         ls, dsx = live["stats"], dead["stats"]
         sm = size_matched(sig, p.subsamples)
-        sm_txt = (f" A random live sample of the same size ({sm['modules']:,} modules) still spreads over {sm['n1_mean']:,.0f}."
-                  if sm.get("available") else "")
+        sm_txt = (f" A random sample of live modules as large as the dead code ({sm['modules']:,}) still spreads over "
+                  f"{sm['n1_mean']:,.0f}, so size alone does not explain it." if sm.get("available") else "")
         enc_ok = all((r["dead"].get("r_inf_half") or 0) > (r["live"].get("r_inf_half") or 0) for r in ensemble) if ensemble else None
+        richer = ("The live proof is the richer wave" if ls["n1"] > dsx["n1"] else "Dead code is the richer wave")
+        level = ("Fewer kinds cancel less, so the dead wave's usual level on the line is higher "
+                 f"({dsx['r_inf_half']:.4f} against {ls['r_inf_half']:.4f}), not lower: dead code is not flat."
+                 if dsx["r_inf_half"] > ls["r_inf_half"] else
+                 f"The dead wave's usual level on the line is {dsx['r_inf_half']:.4f} against {ls['r_inf_half']:.4f} for the live one.")
         out.append({"id": "live-vs-dead", "status": "stable" if enc_ok else ("encoding-specific" if enc_ok is False else "exact"),
-                    "headline": f"Dead code is the more concentrated wave: {dsx['n1']:,.0f} effective classes against {ls['n1']:,.0f}",
-                    "detail": f"Live declarations spread over {ls['n1']:,.0f} effective signature classes, dead ones over {dsx['n1']:,.0f}."
-                              f"{sm_txt} Fewer classes means less cancellation, so the dead wave's long-run level on the line is higher "
-                              f"({dsx['r_inf_half']:.4f} against {ls['r_inf_half']:.4f}), not lower."})
+                    "headline": f"{richer}: {ls['n1']:,.0f} effective kinds of declaration against {dsx['n1']:,.0f} for dead code",
+                    "detail": "Each wave is a sum over structural kinds of declaration. The live one spreads its weight over "
+                              f"{ls['n1']:,.0f} of them, the dead one over {dsx['n1']:,.0f}.{sm_txt} {level}"})
     for pop_name, pop in (("live", live), ("dead", dead)):
         al = pop.get("alignment")
         if al and al.get("available"):
             out.append({"id": f"alignment-{pop_name}", "status": "null" if al["p"] > 0.025 else "encoding-specific",
                         "headline": f"No echo of the Riemann zeros in the {pop_name} wave" if al["p"] > 0.025
-                        else f"The {pop_name} wave dips near the Riemann zeros in this encoding (p = {al['p']:.3f})",
-                        "detail": f"The {al['zeros']} zeros beyond t = {T_ALIGN:g} sit in dips of the {pop_name} wave no more than a "
-                                  f"density-preserving shift of them does (p = {al['p']:.2f}). The two t axes share no unit."})
+                        else f"The {pop_name} wave dips near the Riemann zeros in this numbering (p = {al['p']:.3f})",
+                        "detail": f"The {al['zeros']} zeros of ζ beyond t = {T_ALIGN:g} fall in dips of the {pop_name} wave no more often "
+                                  f"than the same zeros slid along the line do (p = {al['p']:.2f}). The two t axes share no unit, "
+                                  "so none was expected."})
     for pop_name, pop in (("live", live), ("dead", dead)):
         rms = surrogate.get(pop_name, {}).get("rms")
         level = pop["stats"].get("r_inf_half") if pop["stats"].get("present") else None
@@ -971,11 +1024,11 @@ def _findings(data, pops, observed, surrogate, ensemble, zeros, scale, sig: Sign
             same = [x < 1 for x in ratios] if rms["rank"] <= 0.025 else [x > 1 for x in ratios]
             word = "quieter" if rms["rank"] <= 0.025 else "louder"
             out.append({"id": f"window-{pop_name}", "status": "stable" if ratios and all(same) else "encoding-specific",
-                        "headline": f"Near the origin the {pop_name} wave is {word} than its long-run level",
+                        "headline": f"Near the origin the {pop_name} wave is {word} than its usual level",
                         "detail": f"Beyond t = {min(T_ALIGN, 0.2 * p.t_max):g} the {pop_name} wave runs at {100 * rms['observed'] / level:.0f}% of its "
-                                  f"exact long-run level on the line, outside the range of {surrogate['draws']} random surrogates "
+                                  f"exact long-run level on the line, outside the range of {surrogate['draws']} shuffled stand-ins "
                                   f"({100 * rms['lo'] / level:.0f}% to {100 * rms['hi'] / level:.0f}%). "
-                                  f"{sum(same)} of {len(same)} other encodings agree in direction."})
+                                  f"{sum(same)} of {len(same)} other numberings agree in direction."})
     sharp = [m for m in live.get("minima", []) if m["sharp"]]
     if sharp:
         m = min(sharp, key=lambda x: x["r"])
@@ -983,17 +1036,17 @@ def _findings(data, pops, observed, surrogate, ensemble, zeros, scale, sig: Sign
         zero_txt = f", the shadow of a zero at σ = {m['zero']['sigma']:.3f}" if m["zero"] else ""
         out.append({"id": "landmark", "status": "encoding-specific", "at": {"sigma": 0.5, "t": _round(m["t"], 4)},
                     "headline": f"A landmark dip at t = {m['t']:.2f}",
-                    "detail": f"On the line the live wave falls to {100 * m['r'] / live['stats']['r_inf_half']:.1f}% of its long-run level at "
-                              f"t = {m['t']:.2f}{zero_txt}. {100 * b['within']:.0f}% of the amplitude is lost to dephasing inside harmonic "
-                              f"bands and {100 * b['between']:.0f}% cancels between bands. Its position moves with the numbering: "
-                              "a landmark of this encoding, not a bottleneck."})
+                    "detail": f"On the line the live wave falls to {100 * m['r'] / live['stats']['r_inf_half']:.1f}% of its usual level at "
+                              f"t = {m['t']:.2f}{zero_txt}. {100 * b['within']:.0f}% of the height is lost inside single layers of the "
+                              f"proof and {100 * b['between']:.0f}% cancels between layers. Number the proof differently and the dip "
+                              "moves: it is a landmark of this numbering, not a bottleneck."})
     shares = live.get("variance_shares") or {}
     if shares:
         lead = max(shares, key=lambda k: shares[k])
-        names = {"height": "depth beneath the module", "fan_in": "fan-in", "fan_out": "fan-out", "own_pillar": "the module's own pillar",
-                 "imported_pillars": "the set of pillars it imports"}
+        names = {"height": "how deep its dependencies run", "fan_in": "how many modules import it", "fan_out": "how many it imports",
+                 "own_pillar": "its own chapter", "imported_pillars": "which chapters it imports"}
         out.append({"id": "drivers", "status": "exact",
-                    "headline": f"The log-number is driven mostly by {names[lead]} ({100 * shares[lead]:.0f}% of its variance)",
-                    "detail": "Shares of the variance of ln N over live declarations: "
+                    "headline": f"Where a module lands on the wave is set mostly by {names[lead]} ({100 * shares[lead]:.0f}% of the variance)",
+                    "detail": "Shares of the variance of a module's log-number, over live declarations: "
                               + ", ".join(f"{names[k]} {100 * v:.0f}%" for k, v in sorted(shares.items(), key=lambda kv: -kv[1])) + "."})
     return out

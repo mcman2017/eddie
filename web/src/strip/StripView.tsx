@@ -335,11 +335,17 @@ export default function StripView({ active, chapter, onChapter, cinema, onTourin
         <>
           <div className="strip-labels" ref={labelsRef}>
             {chapters.map((c, i) => (
-              <button key={c.slug} type="button" className={`beacon-label tier-${c.tier}`} data-beacon={i} data-testid="beacon"
-                data-chapter={c.chapter} onClick={() => onChapter(c.slug)}
+              <button key={c.slug} type="button" className={`beacon-label tier-${c.tier}${gate?.chapter === c.chapter ? " is-gate" : ""}`}
+                data-beacon={i} data-testid="beacon" data-chapter={c.chapter} onClick={() => onChapter(c.slug)}
                 aria-label={`Chapter ${c.chapter}: ${short(c.title)} (${actName(c.tier)})`}>
                 <b>{c.chapter}</b>
                 <span className="beacon-title">{short(c.title)}</span>
+                {/* the proof's real bottleneck, measured on the dependency graph: marked where it lives */}
+                {gate?.chapter === c.chapter && (
+                  <span className="beacon-gate" data-testid="gate-mark">
+                    {facts.gate?.name} gates {gate.share.toFixed(1)}%
+                  </span>
+                )}
               </button>
             ))}
             {zeros.map((z, i) => (

@@ -136,6 +136,15 @@ async function main() {
   check(sky > 0.9, `the 3D sky is light (luminance ${sky.toFixed(2)})`);
   check((await evaluate("getComputedStyle(document.documentElement).colorScheme")) === "light", "the page declares a light colour scheme");
   check(await evaluate("!!document.querySelector('[data-testid=strip-legend] .legend-ramp') && document.querySelectorAll('[data-testid=strip-legend] .act-chip').length === 4"), "the legend shows the height ramp and the four acts");
+  const gate = await evaluate("fetch('/api/landscape').then(r => r.json()).then(j => j.gate)");
+  check(!!gate && (await evaluate("document.querySelector('[data-testid=gate-mark]')?.textContent ?? ''")).includes(`gates ${gate.share.toFixed(1)}%`), `the gate theorem is marked on its chapter (${gate?.full_name}, ${gate?.share.toFixed(1)}%)`);
+  check(await click("[data-testid=findings-toggle]"), "opened the findings card");
+  const takeaway = await evaluate("fetch('/api/landscape').then(r => r.json()).then(j => j.takeaway)");
+  check(!!takeaway && (await evaluate("document.querySelector('[data-testid=takeaway]')?.textContent")) === takeaway, "the findings card leads with the takeaway built from the numbers");
+  await sleep(150);
+  await shot("21-findings");
+  check(await click("[data-testid=findings-toggle]"), "closed the findings card");
+  await sleep(100);
   await shot("01-strip-overview");
 
   // 2) every deterministic state

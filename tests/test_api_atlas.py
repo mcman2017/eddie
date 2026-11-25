@@ -95,7 +95,7 @@ def test_chapters_follow_the_flow_and_end_at_main(client, world):
 def test_chapter_guide_has_structure_stub_text_and_the_rejected_verified_pair(client, world):
     d = client.get(f"/api/chapters/{world['slugs'][-1]}").json()
     assert d["badge"] == STUB_BADGE and d["source"] == "seed" and d["synthesis_md"].startswith(STUB_BADGE)
-    assert d["tier_label"] == "Main" and d["chapter"] == d["chapters"] == len(world["slugs"])
+    assert d["tier_label"] == "Summit" and d["chapter"] == d["chapters"] == len(world["slugs"])
     assert [w["status"] for w in d["witnesses"]] == ["rejected", "verified"]
     assert d["witnesses"][1]["supersedes_id"] == d["witnesses"][0]["id"] and d["witnesses"][0]["defects"] == ["clipped"]
     assert d["witnesses"][0]["url"].startswith("/api/artifacts/") and d["witnesses"][0]["decl_full_name"] == "riemannHypothesis"

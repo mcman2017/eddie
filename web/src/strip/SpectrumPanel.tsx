@@ -4,7 +4,7 @@ import type { Landscape } from "./landscape";
 
 const STATUS_NOTE: Record<string, string> = {
   exact: "Exact",
-  stable: "Holds across encodings",
+  stable: "Holds however we number it",
   "encoding-specific": "This numbering only",
   null: "Checked, nothing there",
 };
@@ -91,8 +91,13 @@ export function SpectrumPanel({ land, onFly }: { land: Landscape; onFly: (sigma:
 
   const stats = land.meta.proof;
   return (
-    <div className="strip-card" role="region" aria-label="Findings and spectrum">
-      <h2>What the numbers say</h2>
+    <div className="strip-card" role="region" aria-label="What we found">
+      <h2>What we found</h2>
+      {land.meta.takeaway && (
+        <p className="takeaway" data-testid="takeaway">
+          {land.meta.takeaway}
+        </p>
+      )}
       <ul className="findings">
         {land.meta.findings.map((f) => (
           <li key={f.id}>
@@ -110,7 +115,8 @@ export function SpectrumPanel({ land, onFly }: { land: Landscape; onFly: (sigma:
           </li>
         ))}
       </ul>
-      <h2>Power spectrum |F(ω)|², live and dead declarations</h2>
+      <h2>How much of each rhythm the two waves contain</h2>
+      <p className="spectrum-note">Power spectrum |F(ω)|² against frequency ω, on a log scale.</p>
       <div className="spectrum">
         <canvas ref={ref} style={{ width: W, height: H }} onPointerMove={onMove} onPointerLeave={() => setHover(null)}
           aria-label="Power spectrum of the live and dead declarations against ω, log scale" />
@@ -124,11 +130,11 @@ export function SpectrumPanel({ land, onFly }: { land: Landscape; onFly: (sigma:
         )}
       </div>
       <p className="spectrum-legend">
-        <span><i className="swatch swatch-live" /> Live, {stats.live.stats.n1?.toLocaleString(undefined, { maximumFractionDigits: 0 })} effective classes</span>
-        <span><i className="swatch swatch-dead" /> Dead, {stats.dead.stats.n1?.toLocaleString(undefined, { maximumFractionDigits: 0 })} effective classes</span>
+        <span><i className="swatch swatch-live" /> Live proof, {stats.live.stats.n1?.toLocaleString(undefined, { maximumFractionDigits: 0 })} effective kinds</span>
+        <span><i className="swatch swatch-dead" /> Dead code, {stats.dead.stats.n1?.toLocaleString(undefined, { maximumFractionDigits: 0 })}</span>
       </p>
       <p className="spectrum-note">
-        Peaks are recurrences of the prime coding and move with it. What does not move is the floor: fewer effective classes, a
+        The peaks come from how the proof is numbered and move with it. What stays is the floor: fewer kinds of declaration, a
         higher floor.
       </p>
     </div>
