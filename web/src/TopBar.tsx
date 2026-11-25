@@ -24,6 +24,16 @@ function usePoll<T>(fn: () => Promise<T>, ms: number): T | null {
   return value;
 }
 
+/**
+ * Spend to four decimals, but never rounded away: a first call costs about a thousandth of a
+ * cent, and "$0.0000" after it would read as "nothing happened".
+ */
+export function money(usd: number): string {
+  if (usd <= 0) return "$0.0000";
+  if (usd >= 0.0001) return `$${usd.toFixed(4)}`;
+  return `$${usd.toFixed(7).replace(/0+$/, "")}`;
+}
+
 const fetchBudget = () => api.budget();
 const fetchActivity = () => api.activity();
 
@@ -35,6 +45,8 @@ export function TopBar({ overview }: { overview: Overview | null }) {
   const cap = budget?.lifetime_cap_usd ?? 8;
   const spent = budget?.committed_usd ?? 0;
   const danger = budget?.breaker?.state === "open" || budget?.kill_switch;
+  // calls that reached the model and were charged; a refused or released reservation is not one
+  const calls = (budget?.calls_by_state?.settled ?? 0) + (budget?.calls_by_state?.orphan_charged ?? 0);
 
   return (
     <header className="topbar">
@@ -73,11 +85,21 @@ export function TopBar({ overview }: { overview: Overview | null }) {
         {activity?.source === "seed" && active && <li className="region-note">demo data</li>}
       </ol>
       <div className={`spend ${danger ? "spend-danger" : ""} ${(budget?.inflight_worst_case_usd ?? 0) > 0 ? "spend-live" : ""}`}
-        title="Ember spend so far, against the lifetime cap enforced by the spend governor">
-        <span className="spend-amount">${spent.toFixed(4)}</span>
-        <span className="spend-cap">/ ${cap.toFixed(2)} cap</span>
-        {danger && <span className="spend-note">{budget?.kill_switch ? "kill switch on" : "breaker open"}</span>}
-        {!budget?.available && <span className="spend-note">no ledger yet</span>}
+        title="What the paid model has cost so far, against the lifetime cap the spend governor enforces" data-testid="spend-pill">
+        <span className="spend-amount">{money(spent)}</span>
+        <span className="spend-cap">of ${cap.toFixed(2)} cap</span>
+        {danger ? (
+          <span className="spend-note">
+            <span className="spend-alert" aria-hidden="true">
+              !
+            </span>
+            {budget?.kill_switch ? "kill switch on" : "breaker open"}
+          </span>
+        ) : budget?.available ? (
+          <span className="spend-note">{calls === 1 ? "1 live call" : `${calls} live calls`}</span>
+        ) : (
+          <span className="spend-note">no ledger yet</span>
+        )}
       </div>
     </header>
   );
