@@ -44,7 +44,9 @@ web-build:
 docker:
 	docker build -t eddie:dev .
 
-compose-up:
+compose-up: ## keyless read-only API container on 127.0.0.1:8765
+	install -d -m 700 "$${HOME}/.local/share/eddie" "$${HOME}/.local/share/eddie/public"
+	mkdir -p data/index
 	docker compose up -d --build
 
 compose-down:

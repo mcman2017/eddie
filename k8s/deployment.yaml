@@ -1,0 +1,80 @@
+# Keyless, read-only web/API pod. No Secret references by design: live Ember calls run
+# only from the operator CLI on the DGX host, so nothing reachable from the internet can
+# spend the contest budget.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: eddie-web
+  labels:
+    app.kubernetes.io/name: eddie
+    app.kubernetes.io/component: web
+spec:
+  replicas: 1
+  revisionHistoryLimit: 3
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: eddie
+      app.kubernetes.io/component: web
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: eddie
+        app.kubernetes.io/component: web
+    spec:
+      automountServiceAccountToken: false
+      imagePullSecrets:
+        - name: registry-secret
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: web
+          image: registry.theclamlife.com/eddie/eddie:0.1.0
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8765
+          env:
+            - name: EDDIE_BACKEND
+              value: mock
+            - name: EDDIE_INDEX_PATH
+              value: /data/index/eddie_index.sqlite
+            - name: EDDIE_PUBLIC_DIR
+              value: /public
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              cpu: "1"
+              memory: 512Mi
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 30
+            failureThreshold: 3
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir:
+            sizeLimit: 64Mi
