@@ -10,7 +10,7 @@ On 2026-11-20 a formal Lean 4 proof of the Riemann Hypothesis was released: 175,
    - **R2 Multimodal Sensory Critic:** inspects the rendered PNGs, spectrograms and audio, and rejects defective artifacts.
    - **R3 Global Workspace Arbitrator:** checks at high, xhigh or max effort that the intuition faithfully reflects the formal hypotheses, with exact citations.
    - **R4 Nocturnal Consolidator:** synthesizes lemmas into a navigable 20-pillar Proof Atlas.
-3. **An interactive Proof Explorer and Live Decompiler Studio** (React + Vite + Canvas + WebAudio) over a read-only FastAPI backend.
+3. **An interactive Proof Explorer and Live Decompiler Studio** (React + Vite + Three.js + Canvas + WebAudio) over a read-only FastAPI backend: a 3D critical strip that morphs between ζ and the proof's own wave, a dependency wheel, and a 20-chapter atlas.
 
 ### Night 1, measured on the real archive
 
@@ -30,6 +30,19 @@ On 2026-11-20 a formal Lean 4 proof of the Riemann Hypothesis was released: 175,
 | Pillars | **20 proof pillars** found by splitting the live directory tree top-down; 17 are matched to the 20-step timeline in the companion remark |
 | Budget plan | `plan-budget` costs every call with the governor's own estimator and prices. The worst case is **$5.81 of a $6.50 target**: R1 triage for 31,951 live declarations ($2.00), and the full R1 → R4 pipeline for 307 milestones covering all 20 pillars, every one connected to `Main` through its dominators ($3.82). The expected cost is $2.68, scheduled over 4 days under the $2 daily cap. |
 | Explorer | A camera-first map of the whole proof, from `Main` down to single declarations, plus an inspector with visual and audio witnesses |
+
+### Day 2: the critical strip, the proof's own wave and the atlas, still $0
+
+| | |
+|---|---|
+| Chapter order | The 20 pillars are ordered by the proof's own direction: the exact minimum-feedback-arc order of the cross-pillar references (subset DP), grouped into four acts (6 foundations, 9 machinery, 4 bottleneck, Main). **86%** of 2.6M cross-pillar references point forward, against 65% before. Only **5 of the 20** remark steps are attached to a chapter, the ones matched without ambiguity; the old 17 word-overlap guesses are gone. |
+| The ζ terrain | `build-landscape` evaluates ζ(σ + it) on an 81×481 grid of the critical strip with mpmath and checks it against the functional equation (residual 1.5e-12). The 13 zeros up to t = 60 are computed separately to 15 digits. |
+| The proof wave | Every module gets a Gödel-coded structural signature (depth, fan-in, fan-out, its own pillar and the pillars it imports, as prime exponents). 175,187 modules fall into **16,743 exact classes**, and Z(s) = Σ w·e^(−s·ℓ) is evaluated once for the 799,028 live declarations and once for the 266,458 dead ones, in 8 harmonic bands. The whole build takes about 30 s. |
+| What it shows | ζ keeps all 13 of its zeros on σ = 1/2. The live wave has **20 zeros scattered across the strip** (11 to 20 across 19 other encodings; 15.8 ± 2.9 for random surrogates). Dead code sits in fewer effective classes (**1,415 against 2,971**; 2,260 for a size-matched live sample), so its wave is the more concentrated one. The zeros of ζ sit in dips of the wave no more than chance allows (p = 0.76 live, 1.00 dead). |
+| Atlas | `seed-demo` writes one structural stub per chapter (badged `$0 Structural Stub — Ready for R4 Muse Ember`); `/api/chapters` serves them with net flows, bottleneck theorems and witnesses. A stub can never overwrite a chapter a model wrote. |
+| 3D view | Three.js: morph between the two surfaces, harmonic band slider, Live / Dead / Compare, camera presets and a tour, a WebAudio chord from the zeros or the wave's peaks. `scripts/verify_strip.mjs` drives it in headless Chrome. |
+
+**What the wave is and is not.** It is an empirical, name-blind transform of the dependency graph that shares the basis functions of a Dirichlet series. It is not a number-theoretic object and proves nothing about ζ: it has no functional equation, no Euler product and no distinguished line, and σ = 1/2 is drawn only to share ζ's frame. Where an individual zero or dip sits depends on conventions (which prime codes which feature), so `findings.json` marks every statement as exact, stable across an ensemble of encodings, or specific to this numbering. Bottlenecks of the proof are measured by dominators (one theorem gates 84.6% of the live cone), not by the wave. The chapter beacons on the strip are a layout, not a computation.
 
 ## The Metabolic Spend Governor
 
@@ -54,7 +67,7 @@ The rest of the governor:
 
 ```bash
 uv sync
-uv run pytest                                                   # 355 tests, offline, $0
+uv run pytest                                                   # 399 tests, offline, $0
 uv run python scripts/fetch_riemann_archive.py --sample         # synthetic mini tree, instant
 uv run python -m eddie.cli index build --src data/sample/tree
 uv run python -m eddie.cli index search zeta
@@ -74,13 +87,15 @@ uv run python -m eddie.cli index validate-spine data/raw/p0/spine.tsv.gz
 Map, plan and explorer (all $0; the cone needs the real index above and takes about a minute):
 
 ```bash
-make cone   # declaration graph, live proof cone, pillars, zoom tree -> data/index/eddie_cone.sqlite
-make plan   # exact tiered Ember plan inside $6.50 -> data/index/work_plan.json (no model calls)
-make seed   # sandbox-rendered demo witnesses, labeled seed (never Ember output)
-make dev    # API on 127.0.0.1:8765 + Vite on 127.0.0.1:5173
+make cone       # declaration graph, live proof cone, pillars, chapter order -> data/index/eddie_cone.sqlite
+make landscape  # zeta terrain, proof wave, findings -> data/index/landscape/ (about 30 s, no model calls)
+make plan       # exact tiered Ember plan inside $6.50 -> data/index/work_plan.json (no model calls)
+make seed       # sandbox-rendered demo witnesses and 20 chapter stubs, labeled seed (never Ember output)
+make dev        # API on 127.0.0.1:8765 + Vite on 127.0.0.1:5173
+node scripts/verify_strip.mjs   # headless Chrome check of the 3D view (after make web-build and make api)
 ```
 
-Both servers bind to loopback only. To view them from another machine, forward the ports over SSH (`ssh -N -L 5173:127.0.0.1:5173 -L 8765:127.0.0.1:8765 <host>`) and open `http://localhost:5173`. Deep links work: `#decl=<id>` opens a declaration and `#node=<id>` frames a part of the map. `make compose-up` runs the keyless, read-only API container instead.
+Both servers bind to loopback only. To view them from another machine, forward the ports over SSH (`ssh -N -L 5173:127.0.0.1:5173 -L 8765:127.0.0.1:8765 <host>`) and open `http://localhost:5173`. Deep links work and combine: `#view=wheel`, `#mode=wave`, `#chapter=<slug>`, `#cam=dive|finale`, `#decl=<id>`, `#node=<id>`. In the 3D view, keys 1, 2 and 3 fly to the camera presets, T starts the chapter tour and O toggles auto-orbit. `make compose-up` runs the keyless, read-only API container instead.
 
 Backends (`EDDIE_BACKEND`):
 - `mock` (default): deterministic, $0.
@@ -102,12 +117,12 @@ Every `.wav` gets a spectrogram PNG. Every image and audio file gets $0 QC (blan
 |---|---|
 | `eddie/llm/` | Governor, ledger, pricing, estimator, usage parser, transport, gateway, adapters (mock/dgx/ember), telemetry |
 | `eddie/ingest/` | Fetcher, lexer, parser, import graph, index build and queries, declaration references, proof cone, zoom tree, synthetic fixtures |
-| `eddie/planner/` | Proof pillars and the exact tiered budget planner |
+| `eddie/planner/` | Proof pillars and their chapter order, the atlas facts, the zeta/proof-wave landscape, the exact tiered budget planner |
 | `eddie/state/` | The mutable artifacts database (work queue, triage, intuitions, witnesses, reviews) |
 | `eddie/sandbox/` | Runner, child bootstrap, spectrogram/QC post-pass, artifact store |
 | `eddie/demo/` | `seed-demo` and its witness scripts |
 | `eddie/api/` | Read-only FastAPI app and explorer API |
-| `web/` | React/Vite/Canvas explorer: proof map, inspector, witness and audio players |
+| `web/` | React/Vite explorer: the Three.js critical strip, the dependency wheel, the chapter guide, inspector, witness and audio players |
 | `k8s/` | Keyless PSA-`restricted` manifests (not applied) |
 | `tests/` | The offline suite |
 

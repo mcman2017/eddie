@@ -10,6 +10,10 @@ Rebuildable local state. Nothing in here is ever committed.
 | `raw/pdfs/` | Companion PDFs (`remark.pdf`) |
 | `sample/` | Synthetic mini Lean tree (`fetch_riemann_archive.py --sample`) |
 | `index/eddie_index.sqlite` | Structural index (FTS5 plus import graph) |
+| `index/eddie_cone.sqlite` | Declaration graph, live proof cone, pillars and chapter order (`make cone`) |
+| `index/landscape/` | `landscape.json`, `fields.f32`, `findings.json`, `classes.tsv.gz` for the 3D strip (`make landscape`) |
+| `state/eddie_artifacts.sqlite` | Work queue, witnesses, reviews and chapter text |
+| `verify/` | Headless Chrome profile and screenshots from `scripts/verify_strip.mjs` |
 | `shadow.sqlite` | $0 mock/dgx call log with the would-be Ember cost |
 | `artifacts/` | Content-addressed sandbox outputs (PNG, WAV, spectrograms, QC) |
 
