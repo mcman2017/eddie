@@ -8,6 +8,8 @@
 *.pem
 CLAUDE.local.md
 initial-prompt.md
+prompt-*.md
+.hygiene-blocklist
 data/
 exports/
 eddie_ember_telemetry.json

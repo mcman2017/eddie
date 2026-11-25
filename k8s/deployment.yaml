@@ -24,8 +24,6 @@ spec:
         app.kubernetes.io/component: web
     spec:
       automountServiceAccountToken: false
-      imagePullSecrets:
-        - name: registry-secret
       securityContext:
         runAsNonRoot: true
         runAsUser: 10001
@@ -35,7 +33,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: web
-          image: registry.theclamlife.com/eddie/eddie:0.1.0
+          image: ghcr.io/mcman2017/eddie:latest
           imagePullPolicy: IfNotPresent
           ports:
             - name: http

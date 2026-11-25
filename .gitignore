@@ -31,6 +31,8 @@ CLAUDE.local.md
 
 # Private planning notes (never published)
 initial-prompt.md
+prompt-*.md
+.hygiene-blocklist
 
 # Telemetry exports (copied in deliberately at submission time, if ever)
 exports/
