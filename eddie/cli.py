@@ -288,6 +288,103 @@ def cmd_llm_ping(args: argparse.Namespace) -> int:
     return 0
 
 
+# --- index ----------------------------------------------------------------------------------
+
+
+def _index_path(args: argparse.Namespace) -> Path:
+    return Path(args.index) if getattr(args, "index", None) else load_settings().index_path
+
+
+def _open_index(args: argparse.Namespace):
+    from eddie.ingest.index_db import connect_ro
+
+    path = _index_path(args)
+    if not path.exists():
+        raise ConfigError(f"no index at {path}: run `python -m eddie.cli index build --src DIR`")
+    return connect_ro(path)
+
+
+def cmd_index_build(args: argparse.Namespace) -> int:
+    from eddie.ingest.build import build_index
+
+    archive_sha = None
+    manifest = Path(args.src).parent / "FETCH_MANIFEST.json"
+    if manifest.exists():
+        archive_sha = json.loads(manifest.read_text()).get("joined_sha256")
+    build_index(Path(args.src), _index_path(args), workers=args.workers, archive_sha256=archive_sha)
+    return 0
+
+
+def cmd_index_stats(args: argparse.Namespace) -> int:
+    from eddie.ingest.index_db import stats
+
+    with _open_index(args) as con:
+        st = stats(con, output_tokens_per_decl=args.output_tokens)
+    if args.json:
+        _out(json.dumps(st, indent=2))
+        return 0
+    m = st["meta"]
+    _out(f"index         {_index_path(args)}  (parser v{m['parser_version']}, built {m['built_at']}, {m['timing_total_s']} s)")
+    _out(f"source        {st['modules']:,} modules, {st['source_lines']:,} lines, {st['source_bytes'] / 1e9:.3f} GB")
+    _out(f"declarations  {st['decls']:,}  " + ", ".join(f"{k}={v:,}" for k, v in st["decls_by_kind"].items()))
+    _out(f"sorry         {st['sorry_count']}   files with parser anomalies: {st['files_with_anomalies']}")
+    _out(f"imports       {st['external_modules']:,} distinct external modules (" + ", ".join(f"{r}={c:,}" for r, c in st["external_roots"]) + ")")
+    _out(f"graph         reachable from Main: {st['reachable_from_main']:,} / {st['modules']:,}   max depth {st['max_depth']}   max height {st['max_height']}   in cycles {st['modules_in_cycles']}")
+    _out("top PageRank (foundations):")
+    for name, pr, indeg in st["top_pagerank"]:
+        _out(f"    {pr:.6f}  in={indeg:<6} {name}")
+    f = st["forecast_r1_all_signatures"]
+    _out("forecast: ONE Ember R1.triage pass over every signature")
+    _out(f"    signatures      {f['signature_bytes'] / 1e6:,.1f} MB")
+    _out(f"    input           ${f['input_usd_typical']:,.2f} typical (~3.5 B/token), ${f['input_usd_upper_bound']:,.2f} upper bound")
+    _out(f"    output          ${f['output_usd_at_tokens_per_decl']:,.2f} at {f['output_tokens_per_decl']} tokens/decl")
+    _out(f"    total           ${f['total_usd_typical']:,.2f} typical   vs lifetime cap $8.00: the $0 index must choose what Ember sees")
+    return 0
+
+
+def cmd_index_search(args: argparse.Namespace) -> int:
+    from eddie.ingest.index_db import search
+
+    with _open_index(args) as con:
+        rows = search(con, args.query, limit=args.limit, kind=args.kind)
+    for r in rows:
+        _out(f"{r['kind']:<9} {r['full_name'] or '(anonymous)'}   [{r['module']}]")
+        _out(f"          {r['signature'][:160]}")
+    if not rows:
+        _out("no matches")
+    return 0
+
+
+def cmd_index_show(args: argparse.Namespace) -> int:
+    from eddie.ingest.index_db import load_body, lookup
+
+    with _open_index(args) as con:
+        rows = lookup(con, args.name)
+        if not rows:
+            _out("not found")
+            return 1
+        for r in rows[: args.max]:
+            _out(f"{r['kind']} {r['full_name']}   [{r['module']}  {r['path']}:{r['start_line']}-{r['end_line']}]")
+            if r["context"]:
+                _out(f"  context: {r['context'][:300]}")
+            _out(load_body(con, r) if not args.signature_only else r["signature"])
+            _out("")
+    return 0
+
+
+def cmd_index_validate(args: argparse.Namespace) -> int:
+    from eddie.ingest.index_db import validate_against_spine
+
+    roots = None
+    stats_json = Path(args.spine).with_name("stats.json")
+    if stats_json.exists():
+        roots = [r[0] for r in json.loads(stats_json.read_text()).get("project_namespaces", [])]
+    with _open_index(args) as con:
+        report = validate_against_spine(con, Path(args.spine), roots)
+    _out(json.dumps(report, indent=2))
+    return 0
+
+
 # --- parser ---------------------------------------------------------------------------------
 
 
@@ -335,6 +432,34 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--summary", choices=["auto", "concise", "detailed"])
     p.add_argument("--prompt", default="Reply with the single word: ready")
     p.set_defaults(func=cmd_llm_ping)
+
+    index = sub.add_parser("index", help="$0 structural index").add_subparsers(dest="action", required=True)
+    p = index.add_parser("build", help="parse every .lean file into the SQLite FTS5 + graph index")
+    p.add_argument("--src", required=True, help="extracted archive or sample tree")
+    p.add_argument("--workers", type=int)
+    p.add_argument("--index")
+    p.set_defaults(func=cmd_index_build)
+    p = index.add_parser("stats", help="counts, graph summary and the Ember cost forecast")
+    p.add_argument("--index")
+    p.add_argument("--json", action="store_true")
+    p.add_argument("--output-tokens", type=int, default=16, help="assumed output tokens per decl in the forecast")
+    p.set_defaults(func=cmd_index_stats)
+    p = index.add_parser("search", help="full-text search over names, signatures and docstrings")
+    p.add_argument("query")
+    p.add_argument("--limit", type=int, default=20)
+    p.add_argument("--kind")
+    p.add_argument("--index")
+    p.set_defaults(func=cmd_index_search)
+    p = index.add_parser("show", help="print a declaration, loading its body by byte offsets")
+    p.add_argument("name")
+    p.add_argument("--max", type=int, default=3)
+    p.add_argument("--signature-only", action="store_true")
+    p.add_argument("--index")
+    p.set_defaults(func=cmd_index_show)
+    p = index.add_parser("validate-spine", help="recall of parsed names against p0/spine.tsv.gz")
+    p.add_argument("spine")
+    p.add_argument("--index")
+    p.set_defaults(func=cmd_index_validate)
 
     for register in _EXTRA_COMMANDS:
         register(sub)

@@ -163,3 +163,13 @@ def test_main_roots_and_imports():
     assert [i.module for i in rec.imports] == ["Statements", "Formalism.Zeta", "Development.Spectral.Trace"]
     assert [d.full_name for d in rec.decls] == ["riemannHypothesis", "riemannZeta_eq_zero_re"]
     assert rec.module_doc.startswith("# Main")
+
+
+def test_dotted_namespace_opens_one_scope_per_component():
+    src = (
+        "noncomputable section\n\nnamespace A.B.C\n\ndef inner : ℕ := 1\n\nend C\n\n"
+        "theorem middle : True := trivial\n\nend A.B\n\nend\n"
+    )
+    rec = parse_source("x.lean", src.encode())
+    assert [d.full_name for d in rec.decls] == ["A.B.C.inner", "A.B.middle"]
+    assert rec.anomalies == []

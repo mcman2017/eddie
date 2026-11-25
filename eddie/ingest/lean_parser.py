@@ -18,7 +18,7 @@ from dataclasses import dataclass, field
 
 from eddie.ingest.lexer import lex
 
-PARSER_VERSION = "1"
+PARSER_VERSION = "2"
 
 DECL_KINDS = frozenset(
     {"theorem", "lemma", "def", "abbrev", "instance", "structure", "class", "inductive", "axiom", "opaque", "example"}
@@ -253,21 +253,21 @@ def parse_source(path: str, data: bytes) -> ModuleRecord:
         if kw in PREFIXABLE and _ENDS_WITH_IN.search(cmd_text):
             prefixes.append(_norm(nocomment[q:content_end]))
             continue
-        if kw == "namespace":
-            name = cmd_text[len("namespace") :].strip().split()
-            scopes.append(("namespace", name[0] if name else None, []))
-            prefixes = []
-        elif kw == "section":
-            name = cmd_text[len("section") :].strip().split()
-            scopes.append(("section", name[0] if name else None, []))
+        if kw in ("namespace", "section"):
+            # `namespace A.B.C` opens three nested scopes; `end C` closes one, `end A.B` two.
+            words = cmd_text[len(kw) :].strip().split()
+            parts = words[0].split(".") if words else [None]
+            for part in parts:
+                scopes.append((kw, part, []))
             prefixes = []
         elif kw == "mutual":
             scopes.append(("mutual", None, []))
         elif kw == "end":
-            if scopes:
-                scopes.pop()
-            else:
+            words = cmd_text[len("end") :].strip().split()
+            depth = len(words[0].split(".")) if words else 1
+            if len(scopes) < depth:
                 anomalies.append(f"`end` without an open scope at line {offsets.line(s)}")
+            del scopes[max(0, len(scopes) - depth) :]
             prefixes = []
         elif kw in ("open", "variable", "universe", "omit", "include"):
             if scopes:
