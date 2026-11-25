@@ -3,13 +3,18 @@
 // Level 0 is the dependency wheel: the top-level reduction (Main and its kernel) at the center
 // and the proof pillars on a ring around it in chapter order (clockwise from the top, from the
 // foundations to the chapters nearest Main). The heaviest net reference flows are drawn as
-// directed curves, dim at the provider and bright with an arrowhead at the consumer. Every circle is a container: zooming into it packs its children inside
-// (directories -> modules -> declarations), fetched from the read-only API on demand.
+// directed curves, faint at the provider and solid with an arrowhead at the consumer. Every
+// circle is a container: zooming into it packs its children inside (directories -> modules ->
+// declarations), fetched from the read-only API on demand.
+//
+// Colour is the act a part belongs to, everywhere and at every depth. How far Eddie has worked on
+// a declaration is how much of that colour it carries (a tint, then solid, then solid with a
+// check), and code outside the proof is an uncoloured dashed ring.
 
 import { packEnclose, packSiblings } from "d3-hierarchy";
 import { api, type MapChild, type MapPage, type Overview, type PillarSummary } from "./api";
 import { easeInOutCubic, flight, frameFor, toScreen, toWorld, type Flight, type Frame } from "./camera";
-import { COLORS, STATUS_FILL, TIER_LABEL, type Status } from "./theme";
+import { COLORS, TIER_FILL, actName, hexAlpha, type Status } from "./theme";
 
 const WORLD_R = 1000;
 const EXPAND_PX = 112; // draw an aggregate's children once its screen radius reaches this
@@ -70,12 +75,12 @@ function blank(partial: Partial<VNode> & Pick<VNode, "key" | "kind" | "label">, 
   };
 }
 
-/** Second line of a ring label: the act, plus a remark step only when the match was confident. */
+/** Second line of a ring label: the act, plus a step of the authors' PDF only when the match was confident. */
 function stepLabel(p: PillarSummary | undefined): string | null {
   if (!p) return null;
   const step = p.timeline?.[0];
-  const act = TIER_LABEL[p.tier] ?? "";
-  return step ? `${act}, remark step ${step.number}: ${step.phrase}` : act;
+  const act = actName(p.tier);
+  return step ? `${act}, PDF step ${step.number}: ${step.phrase}` : act;
 }
 
 function fromChild(c: MapChild, parent: VNode, pillars: Map<number, PillarSummary>): VNode {
@@ -104,11 +109,6 @@ function fromChild(c: MapChild, parent: VNode, pillars: Map<number, PillarSummar
 }
 
 const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v));
-
-function hexAlpha(hex: string, alpha: number): string {
-  const n = parseInt(hex.slice(1), 16);
-  return `rgba(${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255}, ${alpha.toFixed(3)})`;
-}
 
 export class MapEngine {
   readonly root: VNode;
@@ -490,7 +490,16 @@ export class MapEngine {
     else if (expanded) this.drawContainer(node, sx, sy, sr);
     else this.drawAggregate(node, sx, sy, sr);
     if (expanded) for (const c of node.children ?? []) this.drawNode(c);
-    if (node === this.hover) this.ring(sx, sy, sr + 2, "rgba(240, 239, 236, 0.85)", 2);
+    if (node === this.hover) this.ring(sx, sy, sr + 2, hexAlpha(COLORS.ink, 0.85), 2);
+  }
+
+  /** The act colour of the chapter a node sits in; muted ink for anything outside every chapter. */
+  private act(node: VNode): string {
+    for (let n: VNode | null = node; n; n = n.parent) {
+      const tier = n.pillarId != null ? this.pillars.get(n.pillarId)?.tier : undefined;
+      if (tier) return TIER_FILL[tier];
+    }
+    return COLORS.ink3;
   }
 
   private disc(sx: number, sy: number, sr: number, fill: string): void {
@@ -514,72 +523,76 @@ export class MapEngine {
 
   private drawAggregate(node: VNode, sx: number, sy: number, sr: number): void {
     const { ctx } = this;
+    const act = this.act(node);
+    const atSpine = node.parent?.kind === "root";
     if (node.live === 0) {
-      this.ring(sx, sy, sr, hexAlpha(STATUS_FILL.dead, 0.6), 1, [3, 3]);
+      this.disc(sx, sy, sr, hexAlpha(COLORS.chalk, 0.45));
+      this.ring(sx, sy, sr, COLORS.slate, 1, [3, 3]);
     } else {
       const liveFrac = node.decls ? node.live / node.decls : 1;
-      this.disc(sx, sy, sr, COLORS.ground); // opaque base: edges and siblings never show through
-      this.disc(sx, sy, sr, hexAlpha(STATUS_FILL.live, 0.42 + 0.5 * liveFrac));
-      this.ring(sx, sy, sr, "rgba(255, 255, 255, 0.10)", 1);
+      this.disc(sx, sy, sr, COLORS.raised); // opaque paper base: edges and siblings never show through
+      // On the wheel the chapters are solid, fuller the more of them is live; deeper down a part
+      // is a tint with a solid rim, so its ink label stays readable.
+      this.disc(sx, sy, sr, hexAlpha(act, atSpine ? 0.55 + 0.45 * liveFrac : 0.16 + 0.26 * liveFrac));
+      this.ring(sx, sy, sr, atSpine ? hexAlpha(COLORS.ink, 0.55) : act, atSpine ? 1 : 1.5);
       if (node.verified || node.triaged) {
-        // honest progress: arc length is the share of this node's live declarations
-        const lw = clamp(sr * 0.08, 2, 6);
+        // honest progress, drawn in ink just outside the rim: arc length is the share of this
+        // node's live declarations
+        const lw = clamp(sr * 0.07, 2, 5);
         let a0 = -Math.PI / 2;
-        for (const [count, color] of [[node.verified, STATUS_FILL.verified], [node.triaged, STATUS_FILL.triaged]] as const) {
+        for (const [count, color] of [[node.verified, COLORS.ink], [node.triaged, COLORS.ink3]] as const) {
           if (!count) continue;
           const a1 = a0 + (2 * Math.PI * count) / node.live;
           ctx.beginPath();
-          ctx.arc(sx, sy, sr - lw / 2, a0, a1);
+          ctx.arc(sx, sy, sr + lw / 2 + 2, a0, a1);
           ctx.strokeStyle = color;
           ctx.lineWidth = lw;
           ctx.stroke();
           a0 = a1;
         }
       }
-      if (node.verified > 0) this.beacon(sx, sy - sr, clamp(sr * 0.1, 3, 7));
+      if (node.verified > 0) this.beacon(sx, sy - sr, clamp(sr * 0.1, 4, 8));
     }
-    const atSpine = node.parent?.kind === "root";
     if (atSpine && node.pillarId === 0) {
-      this.label("Main", sx, sy, clamp(sr * 0.34, 14, 26), sr * 1.8, COLORS.ink, 700);
+      this.label("Main", sx, sy, clamp(sr * 0.34, 14, 26), sr * 1.8, COLORS.raised, 700);
     } else if (sr >= 26 && !(atSpine && this.fadeNow > 0.05)) {
       const size = clamp(sr * 0.2, 11, 18);
-      this.wrapped(this.shortLabel(node), sx, sy, size, sr * 1.62, COLORS.ink, 600, sr >= 56 ? 2 : 1);
+      this.wrapped(this.shortLabel(node), sx, sy, size, sr * 1.62, atSpine && node.live ? COLORS.raised : COLORS.ink, 600, sr >= 56 ? 2 : 1);
     }
-    if (node.loading && sr >= PREFETCH_PX) this.ring(sx, sy, sr + 4, hexAlpha(STATUS_FILL.triaged, 0.5), 1.5, [2, 6]);
+    if (node.loading && sr >= PREFETCH_PX) this.ring(sx, sy, sr + 4, hexAlpha(COLORS.ink3, 0.6), 1.5, [2, 6]);
   }
 
   private drawContainer(node: VNode, sx: number, sy: number, sr: number): void {
-    this.disc(sx, sy, sr, hexAlpha(STATUS_FILL.live, node.live ? 0.1 : 0.03));
-    this.ring(sx, sy, sr, node.live ? "rgba(255, 255, 255, 0.16)" : hexAlpha(STATUS_FILL.dead, 0.5), 1, node.live ? [] : [3, 3]);
+    const act = this.act(node);
+    this.disc(sx, sy, sr, node.live ? hexAlpha(act, 0.06) : hexAlpha(COLORS.chalk, 0.25));
+    this.ring(sx, sy, sr, node.live ? hexAlpha(act, 0.7) : COLORS.slate, 1.25, node.live ? [] : [3, 3]);
     const size = clamp(sr * 0.055, 12, 22);
     this.label(this.shortLabel(node), sx, sy - sr * 0.87, size, sr * 1.1, COLORS.ink2, 600);
   }
 
   private drawDecl(node: VNode, sx: number, sy: number, sr: number): void {
-    const { ctx } = this;
     const status = node.status ?? "live";
     const selected = node.declId != null && node.declId === this.selectedDecl;
+    const act = this.act(node);
     if (status === "dead") {
-      this.ring(sx, sy, sr, hexAlpha(STATUS_FILL.dead, 0.75), 1, [3, 3]);
-    } else if (status === "verified") {
-      ctx.save();
-      ctx.shadowColor = STATUS_FILL.verified;
-      ctx.shadowBlur = clamp(sr * 0.7, 6, 28);
-      this.disc(sx, sy, sr, STATUS_FILL.verified);
-      ctx.restore();
-      if (sr >= 12) this.check(sx, sy, sr);
+      this.disc(sx, sy, sr, hexAlpha(COLORS.chalk, 0.45));
+      this.ring(sx, sy, sr, COLORS.slate, 1, [3, 3]);
     } else {
-      this.disc(sx, sy, sr, STATUS_FILL[status]);
+      // the more Eddie has done with a declaration, the more of its act's colour it carries
+      this.disc(sx, sy, sr, COLORS.raised);
+      this.disc(sx, sy, sr, hexAlpha(act, status === "verified" ? 1 : status === "triaged" ? 0.62 : 0.24));
+      this.ring(sx, sy, sr, status === "verified" ? COLORS.ink : act, status === "verified" ? 2 : 1.25);
+      if (status === "verified" && sr >= 12) this.check(sx, sy, sr);
     }
-    if (node.isRoot) this.ring(sx, sy, sr + 3, "rgba(240, 239, 236, 0.9)", 1.5);
+    if (node.isRoot) this.ring(sx, sy, sr + 3.5, COLORS.ink, 1.5);
     if (selected) {
-      this.ring(sx, sy, sr + (node.isRoot ? 7 : 4), COLORS.ink, 2.5);
+      this.ring(sx, sy, sr + (node.isRoot ? 8 : 4.5), COLORS.ink, 2.5);
     }
     if (sr >= 24) {
-      const onLight = status === "verified";
+      const solid = status === "verified";
       const size = clamp(sr * 0.22, 11, 16);
-      const y = status === "verified" && sr >= 12 ? sy + sr * 0.45 : sy;
-      this.wrapped(node.label, sx, y, size, sr * 1.6, onLight ? COLORS.ground : COLORS.ink, 600, sr >= 60 ? 2 : 1);
+      const y = solid && sr >= 12 ? sy + sr * 0.45 : sy;
+      this.wrapped(node.label, sx, y, size, sr * 1.6, solid ? COLORS.raised : COLORS.ink, 600, sr >= 60 ? 2 : 1);
     }
   }
 
@@ -588,13 +601,10 @@ export class MapEngine {
     if (sr >= 22) this.label(node.label, sx, sy, clamp(sr * 0.2, 11, 15), sr * 1.7, COLORS.ink3, 500);
   }
 
+  /** A small ink badge on the rim of a part that holds a verified witness. */
   private beacon(sx: number, sy: number, r: number): void {
-    const { ctx } = this;
-    ctx.save();
-    ctx.shadowColor = STATUS_FILL.verified;
-    ctx.shadowBlur = r * 3;
-    this.disc(sx, sy, r, STATUS_FILL.verified);
-    ctx.restore();
+    this.disc(sx, sy, r + 1.5, COLORS.raised);
+    this.disc(sx, sy, r, COLORS.ink);
   }
 
   private check(sx: number, sy: number, sr: number): void {
@@ -605,7 +615,7 @@ export class MapEngine {
     ctx.moveTo(sx - s * 0.55, cy);
     ctx.lineTo(sx - s * 0.12, cy + s * 0.45);
     ctx.lineTo(sx + s * 0.62, cy - s * 0.45);
-    ctx.strokeStyle = COLORS.ground;
+    ctx.strokeStyle = COLORS.raised;
     ctx.lineWidth = clamp(s * 0.22, 1.5, 4);
     ctx.lineCap = "round";
     ctx.lineJoin = "round";
@@ -691,7 +701,7 @@ export class MapEngine {
       ctx.beginPath();
       ctx.moveTo(hx + ux * (hr + 4), hy + uy * (hr + 4));
       ctx.lineTo(nx - ux * (nr + 4), ny - uy * (nr + 4));
-      ctx.strokeStyle = hexAlpha(STATUS_FILL.triaged, 0.16 * fade);
+      ctx.strokeStyle = hexAlpha(COLORS.ink3, 0.22 * fade);
       ctx.lineWidth = 1;
       ctx.stroke();
     }
@@ -716,15 +726,17 @@ export class MapEngine {
       const len = Math.hypot(dx, dy) || 1;
       const ex = bx - (dx / len) * (br + 3);
       const ey = by - (dy / len) * (br + 3);
-      const strong = (0.1 + 0.34 * norm * norm) * fade;
+      // a flow takes the act colour of the chapter it leaves
+      const act = this.act(a);
+      const strong = (0.3 + 0.6 * norm * norm) * fade;
       const stroke = ctx.createLinearGradient(ax, ay, ex, ey);
-      stroke.addColorStop(0, hexAlpha(STATUS_FILL.verified, strong * 0.12));
-      stroke.addColorStop(1, hexAlpha(STATUS_FILL.verified, strong));
+      stroke.addColorStop(0, hexAlpha(act, strong * 0.12));
+      stroke.addColorStop(1, hexAlpha(act, strong));
       ctx.beginPath();
       ctx.moveTo(ax, ay);
       ctx.quadraticCurveTo(cx, cy, ex, ey);
       ctx.strokeStyle = stroke;
-      ctx.lineWidth = 0.75 + 2.25 * norm;
+      ctx.lineWidth = 1 + 2.5 * norm;
       ctx.stroke();
       const head = 4 + 5 * norm;
       const ux = dx / len;
@@ -734,7 +746,7 @@ export class MapEngine {
       ctx.lineTo(ex - ux * head * 1.7 - uy * head * 0.7, ey - uy * head * 1.7 + ux * head * 0.7);
       ctx.lineTo(ex - ux * head * 1.7 + uy * head * 0.7, ey - uy * head * 1.7 - ux * head * 0.7);
       ctx.closePath();
-      ctx.fillStyle = hexAlpha(STATUS_FILL.verified, Math.min(1, strong * 1.6));
+      ctx.fillStyle = hexAlpha(act, Math.min(1, strong * 1.4));
       ctx.fill();
     }
   }
@@ -767,7 +779,7 @@ export class MapEngine {
         last.y = floor - last.h;
         for (let i = items.length - 2; i >= 0; i--) items[i].y = Math.min(items[i].y, items[i + 1].y - items[i].h - gapY);
       }
-      const colX = cx + side * (outer + 26);
+      const colX = cx + side * (outer + 34);
       const room = side > 0 ? this.width - colX - 16 : colX - 16;
       const align: CanvasTextAlign = side > 0 ? "left" : "right";
       for (const it of items) {
@@ -778,6 +790,9 @@ export class MapEngine {
         ctx.strokeStyle = hexAlpha(COLORS.ink3, 0.5);
         ctx.lineWidth = 1;
         ctx.stroke();
+        // the leader ends in a chip of the chapter's act colour, beside its name
+        this.disc(colX - side * 8, midY, 6, COLORS.raised);
+        this.disc(colX - side * 8, midY, 4.5, this.act(it.n));
         const chapter = this.pillars.get(it.n.pillarId ?? -1)?.chapter;
         this.label(`${chapter != null ? `${chapter}. ` : ""}${this.shortLabel(it.n)}`, colX, it.y, 16, room, COLORS.ink, 600, align, "top");
         if (it.n.context) this.label(it.n.context, colX, it.y + lh, 13.5, room, COLORS.ink3, 400, align, "top");

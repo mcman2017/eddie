@@ -2,7 +2,9 @@ import { useEffect, useRef, useState, type KeyboardEvent, type PointerEvent } fr
 import { api, type MapPage, type Overview } from "./api";
 import { MapEngine, type VNode } from "./mapEngine";
 import { StatusMark } from "./StatusMark";
-import { STATUS_LABEL, type Status } from "./theme";
+import { STATUS_LABEL, actName, type Status } from "./theme";
+
+const TIERS = ["foundations", "machinery", "bottleneck", "main"] as const;
 
 interface Props {
   overview: Overview;
@@ -209,6 +211,14 @@ export function ProofMap({ overview, selected, reveal, initialNode, onSelect }: 
               <StatusMark status={s} size={16} />
               {STATUS_LABEL[s]}
               <span className="legend-count">{counts[s].toLocaleString()}</span>
+            </span>
+          ))}
+        </div>
+        <div className="legend-items">
+          {TIERS.map((tier) => (
+            <span className={`legend-item tier-${tier}`} key={tier}>
+              <i className="act-chip" />
+              {actName(tier)}
             </span>
           ))}
         </div>

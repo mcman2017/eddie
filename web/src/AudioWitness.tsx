@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState, type MouseEvent } from "react";
 import type { Witness } from "./api";
-import { STATUS_FILL } from "./theme";
+import { COLORS } from "./theme";
 
 const fmt = (t: number) => {
   const m = Math.floor(t / 60);
@@ -60,7 +60,7 @@ export function AudioWitness({ audio, spectrogram }: Props) {
         if (v > hi) hi = v;
       }
       if (hi < lo) continue;
-      g.fillStyle = x <= playedX ? STATUS_FILL.verified : STATUS_FILL.triaged;
+      g.fillStyle = x <= playedX ? COLORS.ink : COLORS.lineStrong;
       g.fillRect(x, mid - hi * mid * 0.92, 1, Math.max(1, (hi - lo) * mid * 0.92));
     }
     const pct = `${Math.min(100, (t / buffer.duration) * 100)}%`;

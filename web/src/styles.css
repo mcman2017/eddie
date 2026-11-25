@@ -741,10 +741,43 @@ pre {
   font-weight: 600;
 }
 
-.witness-grid {
+/* a rejected render and the one that replaced it, read top to bottom as before and after */
+.witness-pair {
   display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 10px;
+  gap: 14px;
+}
+
+.figure-frame {
+  display: grid;
+}
+
+/* a verdict heads its image as a band, with an icon and a word: status never rides on colour alone */
+.verdict {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 6px 12px 6px 10px;
+  border-radius: 6px 6px 0 0;
+  font-size: 13.5px;
+  font-weight: 600;
+  line-height: 1.35;
+  color: var(--raised);
+}
+
+.verdict .status-mark {
+  flex: none;
+}
+
+.verdict-rejected {
+  background: var(--critical);
+}
+
+.verdict-verified {
+  background: var(--ink);
+}
+
+.verdict + img {
+  border-radius: 0 0 6px 6px;
 }
 
 .figure {
@@ -761,7 +794,13 @@ pre {
 }
 
 .figure-rejected img {
-  border-color: var(--critical);
+  border: 2px solid var(--critical);
+  border-top: 0;
+}
+
+.figure-verified img {
+  border: 2px solid var(--ink);
+  border-top: 0;
 }
 
 .figure figcaption {
