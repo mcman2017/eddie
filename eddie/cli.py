@@ -487,6 +487,31 @@ def cmd_plan_budget(args: argparse.Namespace) -> int:
     return 0
 
 
+# --- seed-demo --------------------------------------------------------------------------------
+
+
+def cmd_seed_demo(args: argparse.Namespace) -> int:
+    from eddie.demo.seed import SeedParams, seed_demo
+
+    settings = load_settings()
+    cone = Path(args.cone) if args.cone else settings.data_dir / "index" / "eddie_cone.sqlite"
+    if not cone.exists():
+        raise ConfigError(f"no cone at {cone}: run `python -m eddie.cli cone build` first")
+    report = seed_demo(
+        cone_path=cone,
+        index_path=settings.index_path,
+        db_path=settings.data_dir / "state" / "eddie_artifacts.sqlite",
+        artifact_dir=settings.data_dir / "artifacts",
+        params=SeedParams.quick() if args.quick else SeedParams(),
+        activity=not args.no_activity,
+        log=_out,
+    )
+    for w in report["witnesses"]:
+        _out(f"witness  {w['decl']:<40} {w['kind']:<11} {w['status']:<9} {w['sha256'][:12]}.{w['ext']}")
+    _out("seeded   all rows are source='seed' and labeled as not Ember output; re-running replaces them ($0)")
+    return 0
+
+
 # --- sandbox --------------------------------------------------------------------------------
 
 
@@ -617,6 +642,12 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--out")
     p.add_argument("--no-db", action="store_true", help="do not load the queue into eddie_artifacts.sqlite")
     p.set_defaults(func=cmd_plan_budget)
+
+    p = sub.add_parser("seed-demo", help="$0 sandbox witnesses for the explorer (labeled seed, never Ember)")
+    p.add_argument("--cone")
+    p.add_argument("--quick", action="store_true", help="small grids (seconds); for smoke tests")
+    p.add_argument("--no-activity", action="store_true", help="do not mark a brain region as active")
+    p.set_defaults(func=cmd_seed_demo)
 
     sandbox = sub.add_parser("sandbox", help="guarded script runner").add_subparsers(dest="action", required=True)
     p = sandbox.add_parser("run", help="run a generated script; collect plots/audio + spectrograms + QC")
