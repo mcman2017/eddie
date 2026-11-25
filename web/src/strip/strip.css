@@ -59,35 +59,23 @@
   height: 26px;
   padding: 0 5px;
   border-radius: 13px;
-  background: rgba(11, 18, 32, 0.82);
-  border: 1.5px solid currentColor;
+  /* white disc, act-colour ring, ink hairline: it separates from every terrain colour */
+  background: var(--raised);
+  border: 2.5px solid var(--act, var(--ink));
+  box-shadow: 0 0 0 1px rgba(24, 24, 27, 0.55);
+  color: var(--ink);
   font-size: 14px;
   font-weight: 700;
   font-variant-numeric: tabular-nums;
-}
-
-.beacon-label.tier-foundations {
-  color: #6aa5ec;
-}
-
-.beacon-label.tier-machinery {
-  color: #86b6ef;
-}
-
-.beacon-label.tier-bottleneck {
-  color: #b9d5f7;
-}
-
-.beacon-label.tier-main {
-  color: var(--verified);
 }
 
 .beacon-title {
   display: none;
   padding: 3px 9px;
   border-radius: 6px;
-  background: rgba(17, 26, 44, 0.94);
+  background: var(--raised);
   border: 1px solid var(--hair-strong);
+  box-shadow: 0 2px 10px rgba(24, 24, 27, 0.12);
   color: var(--ink);
   font-size: 14.5px;
   font-weight: 600;
@@ -101,16 +89,19 @@
 
 .beacon-label[data-state="selected"] b {
   background: var(--ink);
-  color: var(--ground);
-  border-color: var(--ink);
+  color: var(--raised);
 }
 
 .zero-label {
-  translate: 12px -50%;
+  translate: 14px -50%;
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.94);
+  border: 1px solid var(--hair-strong);
   font-size: 12.5px;
-  color: var(--ink-2);
+  color: var(--ink);
   font-variant-numeric: tabular-nums;
-  text-shadow: 0 0 6px var(--ground), 0 0 2px var(--ground);
+  white-space: nowrap;
 }
 
 .strip-caption {
@@ -122,7 +113,8 @@
   margin: 0;
   padding: 7px 11px;
   border-radius: 8px;
-  background: rgba(11, 18, 32, 0.78);
+  background: rgba(255, 255, 255, 0.92);
+  border: 1px solid var(--hair);
   font-size: 15px;
   line-height: 1.45;
   color: var(--ink-2);
@@ -137,7 +129,7 @@
   border: 1px solid var(--hair-strong);
   border-radius: 8px;
   overflow: hidden;
-  background: rgba(11, 18, 32, 0.9);
+  background: var(--raised);
 }
 
 .strip-cams button,
@@ -179,8 +171,8 @@
   gap: 10px;
   padding: 12px 16px 10px;
   border-radius: 12px;
-  border: 1px solid var(--hair);
-  background: rgba(11, 18, 32, 0.95);
+  border: 1px solid var(--hair-strong);
+  background: rgba(255, 255, 255, 0.96);
   white-space: nowrap;
 }
 
@@ -201,7 +193,7 @@
 .strip-mode input {
   width: 190px;
   margin: 0 12px;
-  accent-color: var(--verified);
+  accent-color: var(--ink);
 }
 
 .strip-wave {
@@ -224,7 +216,7 @@
 
 .strip-bands input {
   width: 210px;
-  accent-color: var(--triaged);
+  accent-color: var(--ink);
 }
 
 .strip-actions {
@@ -241,7 +233,7 @@
 
 .strip-toggle[aria-expanded="true"] {
   color: var(--ink);
-  border-color: var(--verified);
+  border-color: var(--ink);
 }
 
 .strip-hud {
@@ -262,8 +254,9 @@
   gap: 2px;
   padding: 9px 12px;
   border-radius: 8px;
-  background: rgba(17, 26, 44, 0.94);
+  background: var(--raised);
   border: 1px solid var(--hair-strong);
+  box-shadow: 0 6px 24px rgba(24, 24, 27, 0.12);
   font-size: 14px;
   color: var(--ink-2);
   pointer-events: none;
@@ -284,7 +277,8 @@
   padding: 14px 16px 12px;
   border-radius: 10px;
   border: 1px solid var(--hair-strong);
-  background: rgba(17, 26, 44, 0.96);
+  background: var(--raised);
+  box-shadow: 0 6px 24px rgba(24, 24, 27, 0.1);
 }
 
 .strip-card h2 {
@@ -322,8 +316,8 @@
 
 .finding-stable,
 .finding-exact {
-  border-color: rgba(205, 226, 251, 0.5);
-  color: var(--verified);
+  border-color: var(--ink);
+  color: var(--ink);
 }
 
 .finding-encoding-specific,
@@ -351,7 +345,7 @@
   top: 8px;
   bottom: 22px;
   width: 1px;
-  background: rgba(240, 239, 236, 0.5);
+  background: rgba(24, 24, 27, 0.35);
   pointer-events: none;
 }
 
@@ -360,7 +354,7 @@
   top: 2px;
   padding: 2px 7px;
   border-radius: 5px;
-  background: var(--ground);
+  background: var(--raised);
   border: 1px solid var(--hair-strong);
   font-size: 12px;
   color: var(--ink);
@@ -382,7 +376,7 @@
   height: 0;
   margin-right: 6px;
   vertical-align: middle;
-  border-top: 2px solid var(--triaged);
+  border-top: 2px solid var(--ink);
 }
 
 .swatch-dead {
