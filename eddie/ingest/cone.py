@@ -8,6 +8,10 @@ The output is a rebuildable analysis DB. It holds reference edges, liveness (ora
 graph), personalized PageRank from the roots, the dominator tree and the mass each node
 dominates, cross-pillar bridges, a milestone score, the Proof Pillars, and the zoom tree
 (root → pillar → directory → module) that the explorer renders. The index is never modified.
+
+Two orders live in `pillars`: `ord` (the top-level reduction first, then by median depth) keeps
+driving the zoom tree and the budget planner, and `flow_ord` is the chapter order of the atlas,
+from the most foundational pillar to Main (see `eddie.planner.pillars.pillar_flow`).
 """
 
 from __future__ import annotations
@@ -32,7 +36,7 @@ from eddie.ingest.lean_parser import PARSER_VERSION
 from eddie.ingest.refgraph import init_worker, module_edges
 from eddie.planner import pillars as pl
 
-CONE_VERSION = "1"
+CONE_VERSION = "2"
 ROOT_MODULE = "Main"
 _PRIVATE = re.compile(r"^_private\.(?:[^.]+\.)*?0\.(.+)$")
 
@@ -74,9 +78,21 @@ CREATE TABLE pillars (
     head_decl_id INTEGER,
     median_depth REAL,
     timeline TEXT NOT NULL,
-    keywords TEXT NOT NULL
+    keywords TEXT NOT NULL,
+    flow_ord INTEGER NOT NULL,
+    tier TEXT NOT NULL,
+    ref_in INTEGER NOT NULL,
+    ref_out INTEGER NOT NULL,
+    max_dom_share REAL NOT NULL
 );
-CREATE TABLE timeline (number INTEGER PRIMARY KEY, phrase TEXT NOT NULL, pillar_id INTEGER);
+CREATE TABLE timeline (
+    number INTEGER PRIMARY KEY,
+    phrase TEXT NOT NULL,
+    pillar_id INTEGER,
+    candidate_pillar_id INTEGER,
+    score REAL NOT NULL,
+    margin REAL NOT NULL
+);
 CREATE TABLE pillar_edges (source INTEGER NOT NULL, target INTEGER NOT NULL, weight INTEGER NOT NULL);
 CREATE TABLE tree_nodes (
     id INTEGER PRIMARY KEY,
@@ -99,6 +115,7 @@ POST = """
 CREATE INDEX edges_src ON edges(src);
 CREATE INDEX edges_dst ON edges(dst);
 CREATE INDEX metrics_pillar ON decl_metrics(pillar_id, score DESC);
+CREATE INDEX metrics_pillar_dom ON decl_metrics(pillar_id, dom_mass DESC);
 CREATE INDEX metrics_module ON decl_metrics(module_id);
 CREATE INDEX tree_parent ON tree_nodes(parent_id);
 CREATE INDEX tree_module ON tree_nodes(module_id);
@@ -286,15 +303,18 @@ def build_cone(
             top_names[p].append(names[d])
     vocab = pl.pillar_vocabulary(module_names, module_pillar_list, [int(live_per_module[m]) for m in module_ids], top_names, len(specs))
     items: list[pl.TimelineItem] = []
+    matches: list[pl.TimelineMatch] = []
     if pdf_path and Path(pdf_path).exists():
         items = pl.timeline_items(pl.extract_pdf_text(Path(pdf_path)))
-        pl.match_timeline(specs, vocab, items)
+        matches = pl.match_timeline(specs, vocab, items)
     log(f"  pillars: {len(specs)} ({len(items)} timeline steps found in the PDF, "
-        f"{sum(len(s.timeline) for s in specs)} matched)")
+        f"{sum(len(s.timeline) for s in specs)} placed with confidence)")
 
     pillar_rank = np.zeros(n_ids, dtype=np.int64)
     heads: dict[int, int] = {}
     median_depth: dict[int, float] = {}
+    dom_share: dict[int, float] = {}
+    live_total = max(int(live.sum()), 1)
     for p in range(len(specs)):
         members = np.flatnonzero((decl_pillar == p) & live)
         if not len(members):
@@ -305,7 +325,17 @@ def build_cone(
         heads[p] = int(entry[0] if entry else ranked[0])
         d_ok = depth[members][depth[members] >= 0]
         median_depth[p] = float(np.median(d_ok)) if len(d_ok) else 1e9
+        dom_share[p] = float(dom_mass[members].max()) / live_total
     ordering = sorted(range(len(specs)), key=lambda p: (p != 0, median_depth.get(p, 1e9), -specs[p].live))
+
+    # chapter order: the directed flow of references between pillars (provider before consumer)
+    k = len(specs)
+    ps, pt = decl_pillar[ls], decl_pillar[ld]
+    sel = (ps != pt) & (ps >= 0) & (pt >= 0)
+    pillar_weights = np.bincount(ps[sel] * k + pt[sel], minlength=k * k).reshape(k, k) if sel.any() else np.zeros((k, k), dtype=np.int64)
+    flow = pl.pillar_flow(pillar_weights, dom_share)
+    log(f"  flow: {100 * flow.forward_frac:.1f}% of {flow.total:,} cross-pillar references point forward "
+        f"({'exact' if flow.exact else 'greedy'} order)")
 
     # 6) write the cone DB
     out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -324,26 +354,26 @@ def build_cone(
         if spec.timeline:
             subtitle = " · ".join(f"#{it.number} {it.phrase}" for it in spec.timeline)
         con.execute(
-            "INSERT INTO pillars VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO pillars VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 p, _slug(spec.title, used), spec.title, subtitle, spec.category, rank_order, json.dumps(spec.prefixes),
                 int(sum(1 for x in module_pillar_list if x == p)), int((members & exists).sum()), int((members & live).sum()),
                 int((members & exists & ~live).sum()), heads.get(p), median_depth.get(p),
                 json.dumps([{"number": it.number, "phrase": it.phrase} for it in spec.timeline]), json.dumps(spec.keywords),
+                flow.rank[p], flow.tier[p], flow.ref_in[p], flow.ref_out[p], round(dom_share.get(p, 0.0), 6),
             ),
         )
-    for it in items:
-        owner = next((p for p, s in enumerate(specs) if any(t.number == it.number for t in s.timeline)), None)
-        con.execute("INSERT INTO timeline VALUES (?, ?, ?)", (it.number, it.phrase, owner))
+    phrase = {it.number: it.phrase for it in items}
+    con.executemany(
+        "INSERT INTO timeline VALUES (?, ?, ?, ?, ?, ?)",
+        [(m.number, phrase[m.number], m.pillar, m.candidate, m.score, m.margin) for m in matches],
+    )
     con.executemany("INSERT INTO module_pillar VALUES (?, ?)", zip(module_ids, module_pillar_list, strict=True))
-    ps, pt = decl_pillar[ls], decl_pillar[ld]
-    sel = (ps != pt) & (ps >= 0) & (pt >= 0)
-    if sel.any():
-        pairs_pt, weights = np.unique(np.stack([ps[sel], pt[sel]], axis=1), axis=0, return_counts=True)
-        con.executemany(
-            "INSERT INTO pillar_edges VALUES (?, ?, ?)",
-            [(int(a), int(b), int(w)) for (a, b), w in zip(pairs_pt.tolist(), weights.tolist(), strict=True)],
-        )
+    src_p, dst_p = np.nonzero(pillar_weights)
+    con.executemany(
+        "INSERT INTO pillar_edges VALUES (?, ?, ?)",
+        [(int(a), int(b), int(pillar_weights[a, b])) for a, b in zip(src_p.tolist(), dst_p.tolist(), strict=True)],
+    )
     is_root = np.zeros(n_ids, dtype=bool)
     is_root[roots] = True
     rows = []
@@ -379,6 +409,8 @@ def build_cone(
         "pillars": len(specs),
         "timeline_steps": len(items),
         "timeline_matched": sum(len(s.timeline) for s in specs),
+        "flow_forward_pct": round(100 * flow.forward_frac, 2),
+        "flow_method": "exact" if flow.exact else "greedy",
         "max_depth": int(depth.max()) if len(depth) else 0,
         "timing_edges_s": f"{edges_s:.1f}",
         "timing_total_s": f"{time.time() - t0:.1f}",
@@ -496,7 +528,10 @@ def cone_stats(cone_path: Path) -> dict[str, Any]:
     con = sqlite3.connect(f"file:{cone_path}?mode=ro", uri=True)
     con.row_factory = sqlite3.Row
     meta = dict(con.execute("SELECT key, value FROM cone_meta").fetchall())
-    pillars_rows = [dict(r) for r in con.execute("SELECT * FROM pillars ORDER BY ord")]
+    if meta.get("cone_version") != CONE_VERSION:
+        con.close()
+        raise RuntimeError(f"cone was built by v{meta.get('cone_version')}, current is v{CONE_VERSION}: run `cone build` again")
+    pillars_rows = [dict(r) for r in con.execute("SELECT * FROM pillars ORDER BY flow_ord")]
     con.close()
     for p in pillars_rows:
         p["timeline"] = json.loads(p["timeline"])
