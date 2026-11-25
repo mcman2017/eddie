@@ -119,11 +119,11 @@ Backends (`EDDIE_BACKEND`):
 Nothing live exists until you run this, once, by hand, on the host. D is what Meta's dashboard shows for this key since Nov 23.
 
 1. `git status` is clean and `uv run pytest -q` is green.
-2. Put the key in a mode-600 file, never in the repo or an env file: `install -d -m 700 ~/.secrets/eddie`, then `(umask 077; cat > ~/.secrets/eddie/meta_api_key)`, paste, Ctrl-D.
+2. Store the key, never in the repo or an env file. Either run `scripts/ember-key.sh` in your own terminal: it asks for the key with hidden input and puts it in a Kubernetes Secret (by default `eddie-operator/ember-api-key`, in a namespace that runs no workloads; set `EDDIE_KEY_NAMESPACE` and `EDDIE_KEY_SECRET` to choose others), without the key touching a file or a command line; live commands then go through `scripts/ember-live.sh <cli arguments>`, which reads the Secret into the CLI's environment. Or keep a mode-600 file: `install -d -m 700 ~/.secrets/eddie`, then `(umask 077; cat > ~/.secrets/eddie/meta_api_key)`, paste, Ctrl-D.
 3. `uv run python -m eddie.cli budget init --dashboard-usd D`, and type `INIT`.
 4. `uv run python -m eddie.cli budget status`: anchor `ok`, breaker `closed`, kill switch `absent`.
 5. Rehearse at $0: `uv run python -m eddie.cli llm ping --region R1.triage --effort minimal --max-output-tokens 16` prints `backend       mock`.
-6. One live call: `EDDIE_BACKEND=ember EDDIE_ALLOW_LIVE_EMBER=true uv run python -m eddie.cli llm ping --region R1.triage --effort minimal --max-output-tokens 16`. It reserves about $0.00012 against the run and daily caps and $0.3146 (the worst case) against the lifetime gate while in flight, then settles near $0.00001. The flags must be in the process environment: nothing loads `.env`.
+6. One live call: `scripts/ember-live.sh llm ping --region R1.triage --effort minimal --max-output-tokens 16` (with the key file instead: `EDDIE_BACKEND=ember EDDIE_ALLOW_LIVE_EMBER=true uv run python -m eddie.cli llm ping --region R1.triage --effort minimal --max-output-tokens 16`). It reserves about $0.00012 against the run and daily caps and $0.3146 (the worst case) against the lifetime gate while in flight, then settles near $0.00001. The flags must be in the process environment: nothing loads `.env`.
 7. `budget status` again: one settled call, `anomalous: 0`, breaker `closed`. If the breaker is open, stop and read the reason before any `reset-breaker`.
 8. `make dev`: the top pill reads about `$0.00001 of $8.00 cap, 1 live call`.
 9. `uv run python -m eddie.cli budget export-trace`, then compare with the dashboard once it updates. `budget trip --reason "..."` is the manual kill switch.
