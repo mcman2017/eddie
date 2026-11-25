@@ -1270,3 +1270,39 @@ pre {
 .contents-title {
   font-weight: 550;
 }
+
+/* --- capture layout (#cinema) ---------------------------------------------------------------
+   The view takes the whole stage. The right panel is a drawer over it, so opening a chapter
+   never resizes the canvas and the framing of a take does not jump. */
+
+.app-cinema .stage {
+  position: relative;
+  grid-template-columns: minmax(0, 1fr);
+  overflow: hidden;
+}
+
+.app-cinema .side {
+  position: absolute;
+  z-index: 5;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: 600px;
+  transform: translateX(100%);
+  visibility: hidden;
+  transition: transform 0.55s cubic-bezier(0.3, 0, 0.2, 1), visibility 0s 0.55s;
+  box-shadow: -14px 0 44px rgba(24, 24, 27, 0.14);
+}
+
+.app-cinema.drawer-open .side {
+  transform: none;
+  visibility: visible;
+  transition: transform 0.55s cubic-bezier(0.3, 0, 0.2, 1), visibility 0s;
+}
+
+.app-cinema .view-tabs,
+.app-cinema .search,
+.app-cinema .crumbs,
+.app-cinema .map-hint {
+  display: none;
+}

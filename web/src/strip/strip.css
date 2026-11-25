@@ -104,35 +104,124 @@
   white-space: nowrap;
 }
 
+/* one plain sentence first; the exact maths sits under it, smaller */
 .strip-caption {
   position: absolute;
   z-index: 1;
   top: 60px;
   left: 18px;
-  max-width: 690px;
+  max-width: 660px;
   margin: 0;
-  padding: 7px 11px;
+  padding: 9px 13px 10px;
   border-radius: 8px;
-  background: rgba(255, 255, 255, 0.92);
-  border: 1px solid var(--hair);
-  font-size: 15px;
+  background: rgba(255, 255, 255, 0.94);
+  border: 1px solid var(--hair-strong);
+  font-size: 13.5px;
   line-height: 1.45;
   color: var(--ink-2);
   pointer-events: none;
 }
 
-.strip-cams {
+.strip-caption strong {
+  display: block;
+  font-size: 16.5px;
+  font-weight: 650;
+  line-height: 1.35;
+  color: var(--ink);
+}
+
+.strip-caption strong + span {
+  display: block;
+  margin-top: 3px;
+}
+
+/* the shot list: the tour's five shots, each also a camera preset of its own */
+.strip-shots {
   position: absolute;
+  z-index: 2;
   top: 14px;
   right: 18px;
-  display: inline-flex;
+  width: 236px;
+  display: grid;
+  gap: 6px;
+  transition: opacity 0.4s;
+}
+
+.tour-play {
+  padding: 10px 14px;
+  border: 0;
+  border-radius: 8px;
+  background: var(--ink);
+  color: var(--raised);
+  font-size: 15px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.shot-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
   border: 1px solid var(--hair-strong);
   border-radius: 8px;
   overflow: hidden;
   background: var(--raised);
 }
 
-.strip-cams button,
+.shot-list li + li {
+  border-top: 1px solid var(--hair);
+}
+
+.shot-list button {
+  display: block;
+  width: 100%;
+  padding: 7px 12px;
+  border: 0;
+  background: none;
+  text-align: left;
+  font-size: 14px;
+  color: var(--ink-2);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.shot-list button:hover {
+  color: var(--ink);
+  background: var(--hover);
+}
+
+.shot-list button[aria-pressed="true"] {
+  background: var(--ink);
+  color: var(--raised);
+  font-weight: 600;
+}
+
+.shot-extras {
+  display: flex;
+  gap: 6px;
+}
+
+.shot-extras button {
+  flex: 1;
+  padding: 6px 8px;
+  border: 1px solid var(--hair-strong);
+  border-radius: 8px;
+  background: var(--raised);
+  font-size: 13px;
+  color: var(--ink-2);
+  cursor: pointer;
+}
+
+.shot-extras button:hover {
+  color: var(--ink);
+}
+
+.shot-extras button[aria-pressed="true"] {
+  background: var(--ink);
+  border-color: var(--ink);
+  color: var(--raised);
+}
+
 .strip-mode button,
 .strip-toggle {
   padding: 8px 13px;
@@ -143,17 +232,11 @@
   cursor: pointer;
 }
 
-.strip-cams button + button {
-  border-left: 1px solid var(--hair-strong);
-}
-
-.strip-cams button:hover,
 .strip-mode button:hover,
 .strip-toggle:hover {
   color: var(--ink);
 }
 
-.strip-cams button[aria-pressed="true"],
 .strip-mode button[aria-pressed="true"],
 .strip .segmented button[aria-pressed="true"] {
   background: var(--ink);
@@ -248,8 +331,8 @@
 .strip-hover {
   position: absolute;
   z-index: 1;
-  top: 134px;
-  left: 22px;
+  top: 176px;
+  left: 18px;
   display: grid;
   gap: 2px;
   padding: 9px 12px;
@@ -270,9 +353,9 @@
 .strip-card {
   position: absolute;
   top: 62px;
-  right: 18px;
+  right: 266px;
   width: 430px;
-  max-height: calc(100% - 250px);
+  max-height: calc(100% - 262px);
   overflow-y: auto;
   padding: 14px 16px 12px;
   border-radius: 10px;
@@ -488,4 +571,50 @@
   border-radius: 2px;
   background: var(--chalk);
   border: 1px dashed var(--dead);
+}
+
+/* --- capture layout (#cinema) ---------------------------------------------------------------
+   The frame is the top bar, the canvas, the legend and one caption. The caption becomes a
+   lower third; the shot list stays while idle and steps away while the tour runs. */
+
+.strip.is-cinema .strip-console,
+.strip.is-cinema .strip-card,
+.strip.is-cinema .strip-hover {
+  display: none;
+}
+
+.strip.is-cinema .strip-caption {
+  top: auto;
+  bottom: 30px;
+  left: 50%;
+  translate: -50% 0;
+  width: max-content;
+  max-width: min(1240px, calc(100% - 520px));
+  padding: 13px 24px 14px;
+  border-radius: 12px;
+  text-align: center;
+}
+
+.strip.is-cinema .strip-caption strong {
+  font-size: 24px;
+  line-height: 1.3;
+}
+
+.strip.is-cinema .strip-caption span {
+  display: none;
+}
+
+.strip.is-cinema.is-touring .strip-shots {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.strip.is-cinema.is-touring .strip-host canvas {
+  cursor: none;
+}
+
+/* with the drawer in, the caption centres on the part of the canvas that is still in view */
+.app-cinema.drawer-open .strip.is-cinema .strip-caption {
+  left: calc((100% - 600px) / 2 + 60px);
+  max-width: calc(100% - 600px - 380px);
 }

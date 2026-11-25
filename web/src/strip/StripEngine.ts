@@ -18,6 +18,10 @@ import { SX, SY, criticalLine, emptySurface, heightAt, waveSurface, zetaSurface,
 import type { Landscape, ProofZero } from "./landscape";
 import { bakeRamp } from "./ramp";
 import {
+  CUES, SHOTS, auditTour, compileTour, emptyFrame, sampleTour, sceneAt, shotPose, type CompiledTour, type SceneState, type ShotId,
+  type Vec3,
+} from "./tour";
+import {
   APRON_FRAG, APRON_VERT, FLOW_FRAG, FLOW_VERT, GHOST_FRAG, GHOST_VERT, GROUND_FRAG, GROUND_VERT, MARK_FRAG, MARK_VERT, TERRAIN_FRAG,
   TERRAIN_VERT, TUBE_FRAG, TUBE_VERT,
 } from "./shaders";
@@ -32,11 +36,22 @@ export interface Probe {
   lines: string[];
 }
 
+/** The tour reports only when something changes for the controls: about ten times in forty seconds. */
+export interface TourEvent {
+  phase: "start" | "cue" | "end" | "cancel";
+  /** false once the tour has ended, been cancelled, or is held on one frame */
+  playing: boolean;
+  shot: ShotId;
+  cue: number;
+  /** what the controls should show from now on */
+  scene: SceneState;
+}
+
 export interface StripEvents {
   onPick(slug: string): void;
   onHover(chapter: number | null): void;
   onProbe(probe: Probe | null): void;
-  onTour(running: boolean): void;
+  onTour(event: TourEvent): void;
   onContext(state: "lost" | "restored"): void;
 }
 
@@ -118,7 +133,11 @@ export class StripEngine {
   private selected: number | null = null;
   private hovered: number | null = null;
   private flight: { from: Pose; to: Pose; start: number; ms: number } | null = null;
-  private tour: { index: number; next: number } | null = null;
+  private readonly course: CompiledTour;
+  private readonly frame = emptyFrame();
+  /** The tour's clock. While it is set the tour owns the camera, the morph and the population. */
+  private cine: { t: number; playing: boolean; armed: boolean; cue: number } | null = null;
+  private ghostLevel = 0;
   private pulses = { zeta: new Float32Array(64), wave: new Float32Array(64), lamp: new Float32Array(64) };
   private labelKey = "";
   private pointer: { x: number; y: number; at: number } | null = null;
@@ -132,6 +151,7 @@ export class StripEngine {
   ) {
     this.freeze = opts.freeze;
     this.still = opts.freeze != null || (window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false);
+    this.course = compileTour(land.tMax);
     this.canvas = document.createElement("canvas");
     this.canvas.setAttribute("aria-label", "3D critical strip: the zeta terrain and the proof wave, with one beacon per chapter");
     this.canvas.setAttribute("role", "img");
@@ -648,11 +668,15 @@ export class StripEngine {
     if (on) this.kick();
   }
 
-  resize(width: number, height: number, dpr: number): void {
+  /**
+   * `crisp` renders at the display's own pixel ratio (whole pixels, so ink lines stay sharp)
+   * instead of a ratio fitted to a pixel budget: for recording, where sharpness matters more.
+   */
+  resize(width: number, height: number, dpr: number, crisp = false): void {
     if (width < 2 || height < 2) return;
     this.width = width;
     this.height = height;
-    const ratio = Math.min(dpr, 2, Math.sqrt(2_600_000 / (width * height)));
+    const ratio = crisp ? Math.min(Math.max(1, Math.round(dpr)), 2) : Math.min(dpr, 2, Math.sqrt(2_600_000 / (width * height)));
     this.renderer.setPixelRatio(ratio);
     this.renderer.setSize(width, height, false);
     this.camera.aspect = width / height;
@@ -668,6 +692,7 @@ export class StripEngine {
 
   /** 0 = the zeta strip, 1 = the proof wave. Animated changes run up the strip as a front. */
   setMorph(target: number, animate: boolean): void {
+    if (this.cine) return; // the tour owns the scene; the controls catch up when it ends
     const to = Math.min(1, Math.max(0, target));
     if (!animate || this.still) {
       this.morph = this.morphTo = to;
@@ -684,6 +709,7 @@ export class StripEngine {
 
   /** Harmonics 1..count are summed (low bands are the foundations, high bands the chapters near Main). */
   setBandCount(count: number): void {
+    if (this.cine) return;
     this.bandCount = Math.min(this.land.bands, Math.max(1, Math.round(count)));
     for (let b = 0; b < this.land.bands; b++) this.bandTarget[b] = b < this.bandCount ? 1 : 0;
     if (this.still) this.bands.set(this.bandTarget);
@@ -692,9 +718,11 @@ export class StripEngine {
   }
 
   setPopulation(pop: Population): void {
+    if (this.cine) return;
     this.compare = pop === "compare";
     this.popTarget = pop === "dead" ? 1 : 0;
     if (this.still) this.pop = this.popTarget;
+    this.ghostLevel = this.compare ? 1 : 0;
     this.ghostMesh.visible = this.compare;
     this.waveDirty = this.marksDirty = true;
     this.kick();
@@ -708,7 +736,7 @@ export class StripEngine {
   }
 
   setOrbit(on: boolean): void {
-    this.controls.autoRotate = on && !this.still;
+    this.controls.autoRotate = on && !this.still && !this.cine;
     this.kick();
   }
 
@@ -754,9 +782,22 @@ export class StripEngine {
 
   private chapterPose(index: number): Pose {
     const c = this.land.meta.chapters[index];
+    // Main is the tour's last frame: opening its chapter when the tour ends does not move the camera
+    if (c.tier === "main") return this.shotPoseOf("summit");
     const lamp = this.lampPos[index];
-    return { target: new Vector3(lamp.x * 0.6, 0.2, lamp.z), radius: c.tier === "main" ? 34 : 27,
-             azimuth: c.side < 0 ? -0.5 : c.side > 0 ? 0.5 : 0.3, polar: 0.98 };
+    return { target: new Vector3(lamp.x * 0.6, 0.2, lamp.z), radius: 27, azimuth: c.side < 0 ? -0.5 : c.side > 0 ? 0.5 : 0.3, polar: 0.98 };
+  }
+
+  private poseOf(eye: Vec3, target: Vec3): Pose {
+    const d = new Vector3(eye[0] - target[0], eye[1] - target[1], eye[2] - target[2]);
+    const radius = d.length();
+    return { target: new Vector3(target[0], target[1], target[2]), radius, azimuth: Math.atan2(d.x, d.z),
+             polar: Math.acos(Math.min(1, Math.max(-1, d.y / radius))) };
+  }
+
+  private shotPoseOf(id: ShotId): Pose {
+    const p = shotPose(this.course, id);
+    return this.poseOf(p.eye, p.target);
   }
 
   private currentPose(): Pose {
@@ -784,7 +825,9 @@ export class StripEngine {
       this.controls.enableDamping = true;
       const from = this.currentPose();
       const d = from.target.distanceTo(to.target) + Math.abs(from.radius - to.radius);
-      this.flight = { from, to, start: this.clock, ms: Math.min(2200, Math.max(1200, 700 + d * 22)) };
+      const turn = Math.abs(from.azimuth - to.azimuth) + Math.abs(from.polar - to.polar);
+      // already there: no flight, so nothing waits on one
+      this.flight = d < 0.02 && turn < 0.002 ? null : { from, to, start: this.clock, ms: Math.min(2200, Math.max(1200, 700 + d * 22)) };
     }
     this.labelKey = "";
     this.kick();
@@ -797,7 +840,9 @@ export class StripEngine {
 
   flyToChapter(slug: string, instant = false): void {
     const i = this.land.meta.chapters.findIndex((c) => c.slug === slug);
-    if (i >= 0) this.fly(this.chapterPose(i), instant);
+    if (i < 0) return;
+    this.stopTour();
+    this.fly(this.chapterPose(i), instant);
   }
 
   flyToPoint(sigma: number, t: number): void {
@@ -805,18 +850,104 @@ export class StripEngine {
     this.fly({ target: new Vector3(this.wx(sigma), -0.6, -t), radius: 15, azimuth: 0.35, polar: 0.95 });
   }
 
-  /** Chapters 1 to the last on fixed flights: the same framing on every take. */
-  startTour(): void {
-    this.tour = { index: -1, next: this.clock };
-    this.events.onTour(true);
+  /** Go to a shot's key frame on its own. The scene (wave, population) is the caller's to set. */
+  flyToShot(id: ShotId, instant = false): void {
+    this.stopTour();
+    this.fly(this.shotPoseOf(id), instant);
+  }
+
+  // --- the visual tour --------------------------------------------------------------------------
+
+  /**
+   * Play the tour: one continuous move through the five shots, the same on every take. A take
+   * from the start first returns to the opening frame (the overview of the zeta strip) and only
+   * then starts the clock; on a freshly loaded view that takes no time at all.
+   */
+  playTour(from = 0): void {
+    this.cine = null;
+    this.flight = null;
+    this.controls.autoRotate = false;
+    const start = Math.min(this.course.duration, Math.max(0, from));
+    if (start === 0 && !this.still) {
+      this.fly(this.preset("overview"));
+      this.setMorph(0, true);
+      this.setPopulation("live");
+      this.setBandCount(this.land.bands);
+    }
+    this.cine = { t: start, playing: true, armed: false, cue: -1 };
+    this.report("start");
     this.kick();
   }
 
+  /** Show the tour's exact frame at `seconds` and hold it: for deep links and screenshots. */
+  seekTour(seconds: number): void {
+    this.flight = null;
+    this.cine = { t: Math.min(this.course.duration, Math.max(0, seconds)), playing: false, armed: true, cue: -1 };
+    this.applyTour(this.cine.t);
+    this.kick();
+  }
+
+  /** Leave the tour where it is. The normal animators finish whatever the scene was doing. */
   stopTour(): void {
-    if (this.tour) {
-      this.tour = null;
-      this.events.onTour(false);
+    const c = this.cine;
+    if (!c) return;
+    const scene = sceneAt(c.t);
+    this.cine = null;
+    this.sweep = 0;
+    if (this.morph !== (scene.wave ? 1 : 0)) this.setMorph(scene.wave ? 1 : 0, true);
+    this.setPopulation(scene.population);
+    this.events.onTour({ phase: "cancel", playing: false, shot: SHOTS[this.frame.shot].id, cue: this.frame.cue, scene });
+    this.kick();
+  }
+
+  private report(phase: TourEvent["phase"]): void {
+    const c = this.cine;
+    if (!c) return;
+    const cue = Math.max(0, c.cue);
+    this.events.onTour({ phase, playing: c.playing && phase !== "end", shot: CUES[cue].shot, cue, scene: sceneAt(c.t) });
+  }
+
+  /** Put the camera and the scene on the tour's frame at time t. */
+  private applyTour(t: number): void {
+    const c = this.cine;
+    if (!c) return;
+    // without motion the tour is a slideshow: each caption's frame at rest, cut to on the same clock
+    const f = sampleTour(this.course, this.still && c.playing ? CUES[this.cueIndex(t)].still : t, this.frame);
+    this.camera.position.set(f.eye[0], f.eye[1], f.eye[2]);
+    this.controls.target.set(f.target[0], f.target[1], f.target[2]);
+    this.camera.lookAt(this.controls.target);
+    this.morph = this.morphTo = f.morph;
+    this.morphStart = -1;
+    this.sweep = f.sweeping ? 0.35 : 0;
+    const comparing = f.ghost > 0;
+    if (f.pop !== this.pop || comparing !== this.compare) {
+      this.pop = f.pop;
+      this.popTarget = f.pop >= 0.5 ? 1 : 0;
+      this.compare = comparing;
+      this.ghostMesh.visible = comparing;
+      this.waveDirty = this.marksDirty = true;
     }
+    this.ghostLevel = f.ghost;
+    if (f.cue !== c.cue) {
+      c.cue = f.cue;
+      this.report("cue");
+    }
+  }
+
+  private cueIndex(t: number): number {
+    let cue = 0;
+    for (let i = 0; i < CUES.length; i++) if (t >= CUES[i].from) cue = i;
+    return cue;
+  }
+
+  private finishTour(): void {
+    const c = this.cine;
+    if (!c) return;
+    this.report("end");
+    this.cine = null;
+    this.sweep = 0;
+    const main = this.land.meta.chapters.find((ch) => ch.tier === "main");
+    if (main) this.events.onPick(main.slug);
   }
 
   // --- input ------------------------------------------------------------------------------------
@@ -849,7 +980,7 @@ export class StripEngine {
     const box = this.canvas.getBoundingClientRect();
     const x = e.clientX - box.left;
     const y = e.clientY - box.top;
-    if (e.buttons) {
+    if (e.buttons || this.cine?.playing) {
       this.events.onProbe(null);
       return;
     }
@@ -941,10 +1072,20 @@ export class StripEngine {
   private tick = (now: number): void => {
     this.raf = 0;
     if (!this.active || this.disposed || this.contextLost) return;
-    const dt = this.last ? Math.min(0.1, (now - this.last) / 1000) : 0;
+    const raw = this.last ? (now - this.last) / 1000 : 0;
+    const dt = Math.min(0.1, raw);
     this.last = now;
     this.clock = now;
     const time = this.freeze ?? now / 1000;
+
+    const cine = this.cine;
+    if (cine && !cine.armed && !this.flight && this.morphStart < 0 && this.pop === this.popTarget) cine.armed = true;
+    const touring = !!cine && cine.armed;
+    if (cine && touring) {
+      // absolute time, so the tour is the same at 8 frames a second as at 60; a long hitch slows it
+      if (cine.playing) cine.t = Math.min(this.course.duration, cine.t + Math.min(0.25, raw));
+      this.applyTour(cine.t);
+    }
 
     if (this.morphStart >= 0) {
       const e = Math.min(1, (now - this.morphStart) / 1700);
@@ -962,7 +1103,7 @@ export class StripEngine {
         mixing = true;
       }
     }
-    const pop = this.approach(this.pop, this.popTarget, 1.8, dt);
+    const pop = touring ? this.pop : this.approach(this.pop, this.popTarget, 1.8, dt);
     if (pop !== this.pop) {
       this.pop = pop;
       mixing = true;
@@ -970,16 +1111,9 @@ export class StripEngine {
     if (mixing || this.waveDirty) this.updateWave();
     if (!mixing && this.marksDirty) this.placeWaveMarks();
 
-    if (this.tour && !this.flight && now >= this.tour.next) {
-      const next = this.tour.index + 1;
-      if (next >= this.land.meta.chapters.length) this.stopTour();
-      else {
-        this.tour.index = next;
-        this.tour.next = now + 4600;
-        this.events.onPick(this.land.meta.chapters[next].slug);
-      }
-    }
-    if (this.flight) {
+    if (touring) {
+      // the tour placed the camera above
+    } else if (this.flight) {
       const f = this.flight;
       const e = easeInOutCubic(Math.min(1, (now - f.start) / f.ms));
       let turn = f.to.azimuth - f.from.azimuth;
@@ -997,11 +1131,11 @@ export class StripEngine {
     const u = this.terrain.material.uniforms;
     u.uMorph.value = this.morph;
     u.uSweep.value = this.sweep;
-    u.uCompare.value = this.compare ? 1 : 0;
+    u.uCompare.value = this.ghostLevel;
     u.uDead.value = this.pop;
     u.uTime.value = time;
     (u.uZetaPulse.value as Float32Array).set(this.pulses.zeta.subarray(0, 16));
-    this.ghostMesh.material.uniforms.uOpacity.value = this.compare ? this.morph : 0;
+    this.ghostMesh.material.uniforms.uOpacity.value = this.ghostLevel * this.morph;
     const quiet = 1 - 0.72 * this.morph; // the layout steps back while the wave is on stage
     for (const tube of this.tubes) tube.material.uniforms.uFlow.value = quiet;
     this.flow.material.uniforms.uFlow.value = quiet;
@@ -1018,10 +1152,11 @@ export class StripEngine {
       document.documentElement.dataset.strip = "ready";
       (window as unknown as { __eddieStrip?: unknown }).__eddieStrip = this.debug();
     }
+    if (cine && cine === this.cine && cine.playing && touring && cine.t >= this.course.duration) this.finishTour();
     // Keep going while anything can still move; a frozen or reduced-motion view draws on demand.
     // The next frame is requested directly: kick() restarts the clock for a view waking from idle,
     // and going through it here would make every frame's dt zero.
-    const moving = this.flight || this.tour || mixing || this.morphStart >= 0 || this.waveDirty || this.marksDirty;
+    const moving = this.flight || this.cine?.playing || mixing || this.morphStart >= 0 || this.waveDirty || this.marksDirty;
     if ((!this.still || moving) && !document.hidden) this.raf = requestAnimationFrame(this.tick);
   };
 
@@ -1057,7 +1192,8 @@ export class StripEngine {
       }
       label.el.style.display = show ? "" : "none";
       if (!show) continue;
-      label.el.style.transform = `translate(${Math.round(x)}px, ${Math.round(y)}px)`;
+      // whole pixels at rest; during the tour's slow drifts whole pixels would step visibly
+      label.el.style.transform = this.cine?.playing ? `translate(${x.toFixed(2)}px, ${y.toFixed(2)}px)` : `translate(${Math.round(x)}px, ${Math.round(y)}px)`;
       if (label.kind === "beacon") {
         label.el.dataset.state = label.index === this.selected ? "selected" : label.index === this.hovered ? "hover" : "";
       }
@@ -1066,14 +1202,20 @@ export class StripEngine {
 
   private debug() {
     return {
-      settled: () => !this.flight && !this.tour && this.morphStart < 0 && !this.waveDirty && !this.marksDirty && this.pop === this.popTarget
-        && this.bands.every((b, i) => b === this.bandTarget[i]),
+      settled: () => !this.flight && !this.waveDirty && !this.marksDirty && (this.cine
+        ? !this.cine.playing
+        : this.morphStart < 0 && this.pop === this.popTarget && this.bands.every((b, i) => b === this.bandTarget[i])),
       state: () => ({
         morph: this.morph, bands: this.bandCount, pop: this.popTarget, popLevel: this.pop, compare: this.compare, selected: this.selected,
         zeros: this.currentZeros().length, frames: this.frames, camera: this.camera.position.toArray().map((v) => +v.toFixed(3)),
         renderer: this.renderer.info.render, pixelRatio: this.renderer.getPixelRatio(),
       }),
       lose: () => this.renderer.forceContextLoss(),
+      tour: () => ({ duration: this.course.duration, shots: SHOTS.map((s) => ({ id: s.id, at: s.at })), t: this.cine?.t ?? null,
+                     playing: !!this.cine?.playing, cue: this.cine?.cue ?? null }),
+      tourSeek: (seconds: number) => this.seekTour(seconds),
+      tourPlay: (from = 0) => this.playTour(from),
+      tourAudit: () => auditTour(this.course),
     };
   }
 

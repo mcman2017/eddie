@@ -78,6 +78,10 @@ export interface LandscapeMeta {
   chapters: StripChapter[];
   arcs: { from: number; to: number; net: number; final: boolean }[];
   findings: Finding[];
+  /** the theorem that dominates the most of the live proof, and the chapter it lives in */
+  gate?: { full_name: string; share: number; chapter: number; slug: string } | null;
+  /** one plain sentence built from the numbers above */
+  takeaway?: string | null;
 }
 
 export interface Landscape {
