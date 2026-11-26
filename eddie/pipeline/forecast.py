@@ -48,6 +48,7 @@ from eddie.pipeline.orchestrator import (
     batch_key,
     flagship_ref,
     phase_spend_nano,
+    triage_depth,
     unverified_flagships,
 )
 from eddie.pipeline.select import open_cone, select
@@ -186,7 +187,7 @@ def forecast(settings: Settings, opts: RunOptions) -> Forecast:
     fc.measured = measured_ratios(settings.ledger_path)
     fc.phase_spent_nano = phase_spend_nano(settings.ledger_path, opts.phase)  # money is spent only there
     fc.daily_headroom_nano, fc.lifetime_headroom_nano = headroom(settings)
-    sel = select(paths_.cone, paths_.index, plan_path=paths_.plan)
+    sel = select(paths_.cone, paths_.index, per_pillar=triage_depth(opts), plan_path=paths_.plan)
     done = done_steps(paths_.db)
     structured = opts.structured if opts.structured is not None else True
     phase = opts.phase
@@ -198,10 +199,10 @@ def forecast(settings: Settings, opts: RunOptions) -> Forecast:
                           max_output=max_out, instructions=instructions, parts=parts, schema=schema, summary=summary)
         return bound_tokens(r) + (PNG_BOUND if image else 0)
 
-    if phase == "repair":
+    if phase in ("repair", "expand"):
         con = open_cone(paths_.cone, paths_.index)
         try:
-            repair_lines(fc, req, con, sel, done, paths_.db, opts)
+            (repair_lines if phase == "repair" else expand_lines)(fc, req, con, sel, done, paths_.db, opts)
         finally:
             con.close()
         return fc
@@ -319,6 +320,50 @@ def repair_lines(fc: Forecast, req: Callable[..., int], con: sqlite3.Connection,
         if slug not in chapters and f"r4:{slug}:repair" not in done and slug in facts:
             chapters.add(slug)
             chapter_lines(fc, req, facts[slug], plan, weight=REPAIR_REWRITE_WEIGHT)
+
+
+def expand_lines(fc: Forecast, req: Callable[..., int], con: sqlite3.Connection, sel: Any, done: set[str], db: Path,
+                 opts: RunOptions) -> None:
+    """The expand phase: the deeper triage batches exactly, and --expand-witnesses new flagships per chapter
+    (stood in for by its highest-mass declarations with no witness yet) with every attempt, repairs included,
+    at its caps. The summit is not expanded."""
+    triaged: set[str] = set()
+    witnessed: set[str] = set()
+    if db.exists():
+        art = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
+        try:
+            triaged = {r[0] for r in art.execute("SELECT decl_full_name FROM triage WHERE source = 'ember'")}
+            witnessed = {r[0] for r in art.execute(
+                "SELECT DISTINCT decl_full_name FROM pipeline_steps WHERE kind IN ('witness', 'repair') "
+                "AND decl_full_name IS NOT NULL")}
+        except sqlite3.OperationalError:
+            pass
+        finally:
+            art.close()
+    plans = [p for p in sel.pillars if p.slug != sel.main_slug and (not opts.only or p.slug == opts.only)]
+    size = max(1, opts.batch_size)
+    for plan in plans:
+        todo = [d for d in plan.triage if d.full_name not in triaged]
+        for i in range(0, len(todo), size):
+            batch = todo[i : i + size]
+            if batch_key(plan.slug, batch) in done:
+                fc.skipped_done += 1
+                continue
+            text, _ = _triage_prompt(con, batch)
+            fc.add("R1.triage", req("R1.triage", opts.triage_effort, TRIAGE_MAX, prompts.TRIAGE, text, "triage"), TRIAGE_MAX)
+        pool = sorted((d for d in plan.triage if d.full_name not in witnessed and not d.is_root),
+                      key=lambda d: (d.dom_mass, -d.id), reverse=True)
+        for t in pool[: max(0, opts.expand_witnesses)]:
+            tc, nbs = card(con, t.id), neighbours(con, t.id)
+            base = "\n".join([render(tc, label="target"), f"gloss: {FILL_WORDS}", *(render(n, with_context=False) for n in nbs)])
+            crit = "\n".join([render(tc, with_context=False), f"caption: {FILL_WORDS}", "qc {}"])
+            attempts = [(*a, 1.0 if n == 0 else EXPECTED_REPAIRS / 3) for n, a in enumerate(schedule(False))]
+            attempts += [("repair", "high", WORKER_MAX_HIGH, w * (1 - REPAIR_REWRITE_WEIGHT)) for w in REPAIR_WEIGHTS]
+            for n, (_origin, effort, max_out, weight) in enumerate(attempts):
+                text = base if n == 0 else "\n".join([base, prompts.REPAIR_PASS, "x" * (CARRY_CODE + CARRY_HISTORY)])
+                fc.add("R1.worker", req("R1.worker", effort, max_out, prompts.WORKER, text, "worker"), max_out, weight=weight)
+                fc.add("R2.critic", req("R2.critic", "medium", CRITIC_MAX, prompts.CRITIC, crit, "critic", image=True),
+                       CRITIC_MAX, weight=weight)
 
 
 def render_forecast(fc: Forecast) -> list[str]:

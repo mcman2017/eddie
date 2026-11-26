@@ -65,12 +65,12 @@ from eddie.pipeline.context import (
     render,
 )
 from eddie.pipeline.schemas import chapter_problems, prose
-from eddie.pipeline.select import DeclRef, PillarPlan, Selection, open_cone, select
+from eddie.pipeline.select import PER_PILLAR, DeclRef, PillarPlan, Selection, open_cone, select
 from eddie.pipeline.witness import WitnessJob, run_witness
 from eddie.planner.chapters import chapter_facts, short_title
 from eddie.state.artifacts import ArtifactStore
 
-PHASES = ("calibrate", "full-atlas", "repair")
+PHASES = ("calibrate", "full-atlas", "repair", "expand")
 REPAIR_ATTEMPTS = 3  # high-effort attempts the repair phase adds for a flagship with no verified witness
 TRIAGE_MAX = 4_096
 ARBITER_MAX = 8_192
@@ -109,6 +109,9 @@ class RunOptions:
     sandbox_image: str = DEFAULT_SANDBOX_IMAGE
     batch_size: int = 18
     db: Path | None = None
+    max_minutes: float | None = None  # stop sending at this wall-clock deadline, then drain (any phase)
+    expand_triage: int = 30  # expand: declarations per chapter beyond the first PER_PILLAR
+    expand_witnesses: int = 2  # expand: new flagships per chapter
 
 
 @dataclass
@@ -230,6 +233,7 @@ class RunContext:
         self.probing_structured = False
         self.extras_left = EXTRA_WITNESSES
         self._reused: set[str] = set()
+        self.deadline = time.monotonic() + 60 * opts.max_minutes if opts.max_minutes else None
         self._facts: dict[str, dict[str, Any]] | None = None
 
     # --- plumbing -------------------------------------------------------------------------------
@@ -322,6 +326,9 @@ class RunContext:
             raise StopRun(self.stopping, hard=self.hard)
         if self.opts.max_calls is not None and self.calls >= self.opts.max_calls:
             self.stop(f"--max-calls {self.opts.max_calls} reached", hard=False)
+            raise StopRun(self.stopping or "", hard=False)
+        if self.deadline is not None and time.monotonic() >= self.deadline:
+            self.stop(f"--max-minutes {self.opts.max_minutes:g} reached", hard=False)
             raise StopRun(self.stopping or "", hard=False)
         await self.write(lambda: self.store.mark_step(slot_key, "running", bump_attempt=True))
         req = self.caller.build(step_key=slot_key, attempt=k, region=region, effort=effort, max_output=max_output,
@@ -556,7 +563,7 @@ async def _witness_job(ctx: RunContext, plan: PillarPlan, target: DeclRef, *, ca
         con.close()
 
 
-async def witness(ctx: RunContext, plan: PillarPlan, target: DeclRef, *, calibration_draft: bool) -> None:
+async def witness(ctx: RunContext, plan: PillarPlan, target: DeclRef, *, calibration_draft: bool, extra: int = 0) -> None:
     key = f"witness:{target.full_name}"
     step = await ctx.write(lambda: ctx.store.ensure_step(phase=ctx.opts.phase, step_key=key, tag=key, kind="witness",
                                                          pillar_slug=plan.slug, decl_full_name=target.full_name,
@@ -566,12 +573,73 @@ async def witness(ctx: RunContext, plan: PillarPlan, target: DeclRef, *, calibra
     job = await _witness_job(ctx, plan, target, calibration_draft=calibration_draft)
     await ctx.write(lambda: ctx.store.mark_step(key, "running"))
     try:
-        result = await run_witness(ctx, job)
+        result = await run_witness(ctx, job, extra=extra)
     except StepFailed as exc:
         error = str(exc)
         await ctx.write(lambda: ctx.store.mark_step(key, "failed", error=error))
         return
     await ctx.write(lambda: ctx.store.mark_step(key, "done", result=result))
+
+
+def triage_depth(opts: RunOptions) -> int:
+    """Declarations per chapter the selection ranks: the usual PER_PILLAR, deeper for the expand phase."""
+    return PER_PILLAR + max(0, opts.expand_triage) if opts.phase == "expand" else PER_PILLAR
+
+
+async def expansion_flagships(ctx: RunContext, plan: PillarPlan) -> list[DeclRef]:
+    """Up to --expand-witnesses new flagships for a chapter: triaged declarations that triage found drawable
+    (visualizability 2 or 3) and that have no witness yet, most drawable first, then by dominator mass. The picks
+    are recorded, so a resumed run continues the same ones instead of choosing more."""
+    key = f"expand-picks:{plan.slug}"
+    step = await ctx.write(lambda: ctx.store.ensure_step(phase=ctx.opts.phase, step_key=key, tag=key, kind="picks",
+                                                         pillar_slug=plan.slug, source=ctx.source))
+    refs = {d.full_name: d for d in plan.triage}
+    if step["status"] == "done":
+        return [refs[n] for n in json.loads(step["result"] or "{}").get("picks", []) if n in refs]
+
+    def taken() -> set[str]:
+        with ctx.store.read() as con:
+            return {r[0] for r in con.execute(
+                "SELECT DISTINCT decl_full_name FROM pipeline_steps WHERE kind IN ('witness', 'repair') "
+                "AND decl_full_name IS NOT NULL")}
+
+    have = await ctx.write(taken)
+    scored = []
+    for d in plan.triage:
+        if d.full_name in have or d.is_root:
+            continue
+        g = (await _gloss(ctx, d.full_name)) or {}
+        if (g.get("visualizability") or 0) >= 2:
+            scored.append((g["visualizability"], d.dom_mass, -d.id, d))
+    scored.sort(key=lambda s: (s[0], s[1], s[2]), reverse=True)
+    picks = [s[3] for s in scored[: max(0, ctx.opts.expand_witnesses)]]
+    await ctx.write(lambda: ctx.store.mark_step(key, "done", result={"picks": [d.full_name for d in picks]}))
+    return picks
+
+
+async def expand(ctx: RunContext) -> None:
+    """The expand phase: every chapter but the summit gets its next --expand-triage declarations triaged, then up to
+    --expand-witnesses new flagships, each drawn with the usual attempts plus the repair attempts if needed.
+
+    The summit (chapter 20) is left as it is: it is the drawer the capture layout opens. R3 and R4 do not run.
+    """
+    sel = ctx.selection
+    plans = [p for p in sel.pillars if p.slug != sel.main_slug]
+    if ctx.opts.only:
+        plans = [p for p in plans if p.slug == ctx.opts.only]
+
+    async def pillar(plan: PillarPlan) -> None:
+        await triage_pillar(ctx, plan)  # only what is not triaged yet
+        for target in await expansion_flagships(ctx, plan):
+            await witness(ctx, plan, target, calibration_draft=False, extra=REPAIR_ATTEMPTS)
+
+    async def guarded(plan: PillarPlan) -> None:
+        try:
+            await pillar(plan)
+        except StopRun:
+            pass  # the flag is set; every other pillar stops at its next call
+
+    await asyncio.gather(*(guarded(p) for p in plans))
 
 
 def unverified_flagships(con: sqlite3.Connection, source: str) -> list[tuple[str, str]]:
@@ -899,6 +967,9 @@ async def execute(ctx: RunContext) -> None:
     if ctx.opts.phase == "repair":
         await repair(ctx)
         return
+    if ctx.opts.phase == "expand":
+        await expand(ctx)
+        return
     calibrate = ctx.opts.phase == "calibrate"
     probe_keys = [s["step_key"] for s in ctx.store.steps("calibrate") if s["kind"] == "call" and s["step_key"].startswith("probe:")
                   and s["status"] == "done"]
@@ -945,7 +1016,7 @@ async def run_phase(settings: Settings, opts: RunOptions, *, sandbox: Any = None
             raise StopRun(f"missing {need}: build the index and the cone first (make cone)", hard=True)
     with run_lock(paths_.lock):
         store = ArtifactStore(paths_.db)
-        selection = select(paths_.cone, paths_.index, plan_path=paths_.plan)
+        selection = select(paths_.cone, paths_.index, per_pillar=triage_depth(opts), plan_path=paths_.plan)
         if opts.phase == "full-atlas" and not opts.force:
             done = store.step(f"r4:{selection.main_slug}")
             if done is None or done["status"] != "done":
