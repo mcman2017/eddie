@@ -168,8 +168,8 @@ def headroom(settings: Settings) -> tuple[int | None, int | None]:
 
 
 def forecast(settings: Settings, opts: RunOptions) -> Forecast:
-    live = settings.backend == "ember"
-    paths_ = RunPaths.for_settings(settings, live=live, db=opts.db)
+    # a forecast is always of the live run: the canonical database's steps count, never a rehearsal's
+    paths_ = RunPaths.for_settings(settings, live=True, db=opts.db)
     fc = Forecast(opts.phase, run_cap_nano=settings.run_cap_nano)
     fc.measured = measured_ratios(settings.ledger_path)
     fc.phase_spent_nano = phase_spend_nano(ledger_path_for(settings), opts.phase)
