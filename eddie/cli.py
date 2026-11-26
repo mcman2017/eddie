@@ -612,9 +612,13 @@ def cmd_run_ember(args: argparse.Namespace) -> int:
              else f"audit: {len(problems)} problem(s)")
         return 0 if not problems else 1
     if not args.phase:
-        raise ConfigError("run-ember needs --phase calibrate or --phase full-atlas")
+        raise ConfigError("run-ember needs --phase calibrate, full-atlas, repair or expand")
     if not 1 <= args.batch_size <= 25:
         raise ConfigError("--batch-size must be within 1..25")
+    if args.max_minutes is not None and not 0 < args.max_minutes <= 240:
+        raise ConfigError("--max-minutes must be within (0, 240]")
+    if not 0 <= args.expand_triage <= 200 or not 0 <= args.expand_witnesses <= 3:
+        raise ConfigError("--expand-triage must be within 0..200 and --expand-witnesses within 0..3")
     if not 1 <= args.concurrency <= 4:
         raise ConfigError("--concurrency must be within 1..4 (the ledger admits 4 calls in flight)")
     opts = RunOptions(
@@ -622,6 +626,7 @@ def cmd_run_ember(args: argparse.Namespace) -> int:
         calibration_pair=not args.no_calibration_pair, triage_effort=args.triage_effort,
         arbiter_effort=args.arbiter_effort, structured=False if args.no_structured else None, force=args.force,
         sandbox=args.sandbox, sandbox_image=args.sandbox_image, batch_size=args.batch_size, db=db,
+        max_minutes=args.max_minutes, expand_triage=args.expand_triage, expand_witnesses=args.expand_witnesses,
     )
     if args.dry_run:
         from eddie.pipeline.forecast import as_json, forecast, render_forecast
@@ -815,11 +820,14 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser("run-ember", help="the 4-region Ember pipeline: --phase calibrate, then --phase full-atlas")
     p.add_argument("action", nargs="?", default="run", choices=["run", "status", "audit"])
-    p.add_argument("--phase", choices=["calibrate", "full-atlas", "repair"])
+    p.add_argument("--phase", choices=["calibrate", "full-atlas", "repair", "expand"])
     p.add_argument("--dry-run", action="store_true", help="forecast the phase's worst case and expected cost; calls nothing")
     p.add_argument("--concurrency", type=int, default=3)
     p.add_argument("--only", help="one chapter slug")
     p.add_argument("--max-calls", type=int, help="stop scheduling after this many model calls")
+    p.add_argument("--max-minutes", type=float, help="stop sending at this wall-clock deadline, then drain")
+    p.add_argument("--expand-triage", type=int, default=30, help="expand: declarations per chapter beyond the first 40")
+    p.add_argument("--expand-witnesses", type=int, default=2, help="expand: new flagships per chapter (0..3)")
     p.add_argument("--no-calibration-pair", action="store_true", help="skip calibrate's checklist-free first draft")
     p.add_argument("--triage-effort", choices=["low", "minimal"], default="low")
     p.add_argument("--arbiter-effort", choices=["high", "xhigh"], default="high")

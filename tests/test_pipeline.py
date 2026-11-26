@@ -465,3 +465,48 @@ def test_the_repair_phase_retries_unverified_flagships_and_rewrites_their_chapte
     again = run(settings, RunOptions(phase="repair"), sandbox=runner, gateway_factory=factory, log=quiet)
     assert again.stopped is None and again.calls == 0
 
+
+def test_the_expand_phase_deepens_triage_and_draws_new_flagships_outside_the_summit(world, monkeypatch):
+    from eddie.pipeline import orchestrator
+
+    monkeypatch.setattr(orchestrator, "PER_PILLAR", 2)  # a shallow first selection leaves room to expand into
+    data, runner = world
+    fake = FakeEmber()
+    settings, factory = live(fake, EDDIE_DATA_DIR=data)
+    for phase in ("calibrate", "full-atlas"):
+        assert run(settings, RunOptions(phase=phase), sandbox=runner, gateway_factory=factory, log=quiet).stopped is None
+    db = data / "state" / "eddie_artifacts.sqlite"
+    sel = select(data / "index" / "eddie_cone.sqlite", data / "index" / "eddie_index.sqlite")
+    summit = {d.full_name for d in sel.pillar(sel.main_slug).triage} | {sel.main_theorem.full_name}
+    triaged = {r[0] for r in rows(db, "SELECT decl_full_name FROM triage WHERE source = 'ember'")}
+    witnessed = {r[0] for r in rows(db, "SELECT DISTINCT decl_full_name FROM witness_attempts")}
+    opts = RunOptions(phase="expand", expand_triage=5, expand_witnesses=1)
+    fc = forecast(settings, opts)  # $0 first
+    assert fc.lines["R1.triage"].calls >= 1 and fc.lines["R1.worker"].calls >= 6  # every attempt, repairs included
+    before = len(fake.bodies)
+    summary = run(settings, opts, sandbox=runner, gateway_factory=factory, log=quiet)
+    assert summary.stopped is None, summary
+    new_triage = {r[0] for r in rows(db, "SELECT decl_full_name FROM triage WHERE source = 'ember'")} - triaged
+    new_witnessed = {r[0] for r in rows(db, "SELECT DISTINCT decl_full_name FROM witness_attempts")} - witnessed
+    assert new_triage and new_witnessed
+    assert not (new_triage | new_witnessed) & summit  # the summit drawer is left exactly as it was
+    for decl in new_witnessed:
+        assert ("verified",) in rows(db, "SELECT outcome FROM witness_attempts WHERE decl_full_name = ?", decl)
+    expand_tags = rows(settings.ledger_path, "SELECT tag FROM calls WHERE tag LIKE 'd3:expand:%' AND state = 'settled'")
+    assert len(expand_tags) == len(fake.bodies) - before  # its own budget: every call carries the phase's tag
+    assert audit(settings) == []
+    again = run(settings, opts, sandbox=runner, gateway_factory=factory, log=quiet)
+    assert again.stopped is None and again.calls == 0  # the picks are recorded: a rerun chooses no more
+
+
+def test_a_time_cap_stops_before_the_next_call_and_the_run_resumes(world):
+    data, runner = world
+    fake = FakeEmber()
+    settings, factory = live(fake, EDDIE_DATA_DIR=data)
+    capped = run(settings, RunOptions(phase="calibrate", max_minutes=1e-9), sandbox=runner, gateway_factory=factory,
+                 log=quiet)
+    assert capped.stopped and "--max-minutes" in capped.stopped and not capped.hard
+    assert capped.calls == 0 and not fake.bodies  # nothing was sent after the deadline
+    resumed = run(settings, RunOptions(phase="calibrate"), sandbox=runner, gateway_factory=factory, log=quiet)
+    assert resumed.stopped is None, resumed
+
