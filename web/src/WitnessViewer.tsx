@@ -1,5 +1,5 @@
 import { useState } from "react";
-import type { DeclDetail, Witness } from "./api";
+import type { Attempt, DeclDetail, Receipt, Witness } from "./api";
 import { StatusMark } from "./StatusMark";
 import { COLORS } from "./theme";
 
@@ -26,17 +26,73 @@ export function pairWitnesses(witnesses: Witness[]): Pair[] {
   return pairs;
 }
 
-export function WitnessViewer({ witnesses, reviews }: { witnesses: Witness[]; reviews: DeclDetail["reviews"] }) {
+const RELATION: Record<string, string> = {
+  special_case_check: "Special-case check",
+  numerical_illustration: "Illustration",
+  analogy: "Analogy",
+};
+
+const OUTCOME: Record<string, string> = {
+  verified: "verified by R2",
+  rejected: "rejected by R2",
+  qc_failed: "failed Eddie's automatic image checks",
+  sandbox_error: "did not run in the sandbox",
+  rejected_static: "refused before running (static check)",
+  invalid_output: "the reply could not be used",
+  critic_unusable: "R2 gave no usable verdict",
+};
+
+/** One model call, in a line: which region, how hard it thought, what it cost (no vendor names). */
+export function ReceiptLine({ receipt }: { receipt: Receipt | null | undefined }) {
+  if (!receipt) return null;
+  const tokens = receipt.input_tokens + receipt.output_tokens;
+  return (
+    <p className="receipt" title={receipt.response_id ?? undefined}>
+      {receipt.region} · {receipt.effort} · {tokens.toLocaleString()} tokens ·{" "}
+      {receipt.backend === "ember" ? `$${receipt.cost_usd.toFixed(4)}` : `${receipt.backend}, $0`}
+      {receipt.response_id ? ` · ${receipt.response_id.slice(0, 16)}…` : ""}
+    </p>
+  );
+}
+
+export function WitnessViewer({ witnesses, reviews, receipts, attempts }: {
+  witnesses: Witness[];
+  reviews: DeclDetail["reviews"];
+  receipts?: Record<string, Receipt>;
+  attempts?: Attempt[];
+}) {
   return (
     <>
       {pairWitnesses(witnesses).map((pair) => (
-        <WitnessPair key={`${pair.verified?.id}-${pair.rejected?.id}`} pair={pair} reviews={reviews} />
+        <WitnessPair key={`${pair.verified?.id}-${pair.rejected?.id}`} pair={pair} reviews={reviews} receipts={receipts} />
       ))}
+      {attempts && attempts.length > 1 && (
+        <details className="attempts">
+          <summary>All {attempts.length} attempts</summary>
+          <ol>
+            {attempts.map((a) => (
+              <li key={`${a.attempt}-${a.origin}`}>
+                <b>Attempt {a.attempt + 1}</b>
+                {a.origin === "calibration_draft" ? " (calibration draft, written without the plot checklist)" : ""}:{" "}
+                {OUTCOME[a.outcome] ?? a.outcome}
+                {a.effort ? `, ${a.effort} effort` : ""}
+                {a.critique && a.critique.length > 0 && (
+                  <ul>
+                    {a.critique.slice(0, 4).map((c) => (
+                      <li key={c}>{c}</li>
+                    ))}
+                  </ul>
+                )}
+              </li>
+            ))}
+          </ol>
+        </details>
+      )}
     </>
   );
 }
 
-function WitnessPair({ pair, reviews }: { pair: Pair; reviews: DeclDetail["reviews"] }) {
+function WitnessPair({ pair, reviews, receipts }: { pair: Pair; reviews: DeclDetail["reviews"]; receipts?: Record<string, Receipt> }) {
   const both = !!(pair.verified && pair.rejected);
   // a pair opens as before and after: the contrast between the two renders is the point
   const [mode, setMode] = useState<Mode>(both ? "both" : pair.verified ? "verified" : "rejected");
@@ -67,10 +123,16 @@ function WitnessPair({ pair, reviews }: { pair: Pair; reviews: DeclDetail["revie
       ) : (
         shown && <Figure w={shown} />
       )}
+      {shown?.caption && <p className="witness-caption">{shown.caption}</p>}
+      {shown?.call_id && <ReceiptLine receipt={receipts?.[shown.call_id]} />}
       {mode !== "verified" && pair.rejected && (
         <div className="defects">
           <p className="defects-title">
-            {pair.rejected.source === "seed" ? "Defects in this render (seed demo: planted, then measured)" : "What the R2 critic caught"}
+            {pair.rejected.source === "seed"
+              ? "Defects in this render (seed demo: planted, then measured)"
+              : (pair.rejected.critic_verdict as { reviewer?: string } | null)?.reviewer === "sandbox-qc"
+                ? "What Eddie's automatic image checks caught"
+                : "What the R2 critic caught"}
           </p>
           <ul>
             {[...pair.rejected.defects, ...(rejectedReview?.reasons ?? [])].map((d) => (
@@ -118,7 +180,10 @@ function Figure({ w }: { w: Witness }) {
           {verdict}
           {w.title ? `: ${w.title}` : ""}
           {w.source === "seed" ? " (seed render, local sandbox)" : ""}
+          {w.source === "mock" ? " (mock rehearsal, not Ember)" : ""}
         </span>
+        {w.relation && <span className="chip">{RELATION[w.relation] ?? w.relation}</span>}
+        {w.origin === "calibration_draft" && <span className="chip chip-dashed">Calibration draft: written without the plot checklist</span>}
       </figcaption>
     </figure>
   );

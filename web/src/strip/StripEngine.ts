@@ -45,6 +45,8 @@ export interface TourEvent {
   cue: number;
   /** what the controls should show from now on */
   scene: SceneState;
+  /** the tour's own clock, in seconds (what the narration follows) */
+  t: number;
 }
 
 export interface StripEvents {
@@ -53,6 +55,8 @@ export interface StripEvents {
   onProbe(probe: Probe | null): void;
   onTour(event: TourEvent): void;
   onContext(state: "lost" | "restored"): void;
+  /** the viewer moved the camera by hand (touring or not): anything playing along should stop */
+  onInteract?(): void;
 }
 
 interface Pose {
@@ -896,7 +900,7 @@ export class StripEngine {
     this.sweep = 0;
     if (this.morph !== (scene.wave ? 1 : 0)) this.setMorph(scene.wave ? 1 : 0, true);
     this.setPopulation(scene.population);
-    this.events.onTour({ phase: "cancel", playing: false, shot: SHOTS[this.frame.shot].id, cue: this.frame.cue, scene });
+    this.events.onTour({ phase: "cancel", playing: false, shot: SHOTS[this.frame.shot].id, cue: this.frame.cue, scene, t: c.t });
     this.kick();
   }
 
@@ -904,7 +908,7 @@ export class StripEngine {
     const c = this.cine;
     if (!c) return;
     const cue = Math.max(0, c.cue);
-    this.events.onTour({ phase, playing: c.playing && phase !== "end", shot: CUES[cue].shot, cue, scene: sceneAt(c.t) });
+    this.events.onTour({ phase, playing: c.playing && phase !== "end", shot: CUES[cue].shot, cue, scene: sceneAt(c.t), t: c.t });
   }
 
   /** Put the camera and the scene on the tour's frame at time t. */
@@ -955,6 +959,7 @@ export class StripEngine {
   private onUserMove = (): void => {
     this.flight = null;
     this.stopTour();
+    this.events.onInteract?.();
   };
 
   private project(p: Vector3): [number, number, boolean] {
@@ -1212,7 +1217,8 @@ export class StripEngine {
       }),
       lose: () => this.renderer.forceContextLoss(),
       tour: () => ({ duration: this.course.duration, shots: SHOTS.map((s) => ({ id: s.id, at: s.at })), t: this.cine?.t ?? null,
-                     playing: !!this.cine?.playing, cue: this.cine?.cue ?? null }),
+                     playing: !!this.cine?.playing, cue: this.cine?.cue ?? null,
+                     cues: CUES.map((c) => ({ shot: c.shot, from: c.from })) }),
       tourSeek: (seconds: number) => this.seekTour(seconds),
       tourPlay: (from = 0) => this.playTour(from),
       tourAudit: () => auditTour(this.course),

@@ -88,6 +88,7 @@ export function App() {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const el = e.target as HTMLElement | null;
+      if (document.querySelector("dialog[open]")) return; // the film's lightbox has the keyboard
       if (e.key === "Escape" && cinema && drawer) {
         setDrawer(false);
         return;

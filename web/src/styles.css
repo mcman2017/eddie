@@ -1340,3 +1340,66 @@ pre {
   font-weight: 700;
   vertical-align: 1px;
 }
+
+/* --- Ember output: receipts, relation chips, attempts, the R3 audit (Day 3) ------------------ */
+
+.receipt {
+  margin: 4px 0 0;
+  font-family: var(--code);
+  font-size: 11px;
+  color: var(--dead);
+}
+
+.chip {
+  display: inline-block;
+  margin: 2px 4px 2px 0;
+  padding: 1px 8px;
+  border: 1px solid var(--hair-strong);
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--ink);
+  background: var(--raised);
+}
+
+.chip-dashed {
+  border-style: dashed;
+}
+
+.witness-caption {
+  margin: 6px 0 0;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.attempts {
+  margin-top: 8px;
+  font-size: 12px;
+}
+
+.attempts ol {
+  margin: 6px 0 0;
+  padding-left: 18px;
+}
+
+.attempts ul {
+  margin: 2px 0 6px;
+  padding-left: 16px;
+  color: var(--dead);
+}
+
+.guide-headline {
+  margin: 4px 0 6px;
+  font-size: 15px;
+  font-style: normal;
+  font-weight: 600;
+}
+
+.audit {
+  margin: 0 0 6px;
+  font-size: 12px;
+}
+
+.triage-tags {
+  margin: 6px 0 0;
+}

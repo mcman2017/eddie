@@ -1,7 +1,7 @@
 UV ?= uv
 PY := $(UV) run python
 
-.PHONY: setup test lint fmt hygiene sample fetch index stats cone landscape plan seed dev api web web-build docker compose-up compose-down k8s-validate
+.PHONY: setup test lint fmt hygiene sample fetch index stats cone landscape plan seed dev api web web-build docker compose-up compose-down k8s-validate sandbox-image rehearse narration sync-demo-video
 
 setup: ## install Python deps into .venv and web deps into web/node_modules
 	$(UV) sync
@@ -44,6 +44,19 @@ plan: ## exact tiered Ember work plan inside $$6.50 ($0: no model calls)
 seed: ## $0 sandbox witnesses for the explorer, labeled seed (never Ember output)
 	$(PY) -m eddie.cli seed-demo
 
+sandbox-image: ## the container that model-written witness scripts run in (no network, job dir only)
+	docker build --target sandbox -t eddie-sandbox:local .
+
+rehearse: ## $0 end-to-end calibrate on the mock backend, into data/state/rehearsal.sqlite
+	EDDIE_BACKEND=mock $(PY) -m eddie.cli run-ember --phase calibrate
+
+VOICE ?= am_michael
+narration: ## render the visual tour's voice-over to web/public/audio/tour/ (Kokoro, local CPU, $0)
+	$(UV) run --group voice python scripts/build_tour_narration.py --voice $(VOICE) --audition
+
+sync-demo-video: ## copy the latest film from ~/eddie-demo/out into data/media/ (read-only there)
+	scripts/sync_demo_video.sh
+
 dev: ## API on 127.0.0.1:8765 + Vite on 127.0.0.1:5173; Ctrl-C stops both
 	@trap 'kill 0' INT TERM EXIT; \
 	$(UV) run uvicorn eddie.api.app:app --host 127.0.0.1 --port 8765 & \
@@ -71,4 +84,5 @@ compose-down:
 	docker compose down
 
 k8s-validate: ## render + client-side validate only; never applies
-	kubectl kustomize k8s | kubectl apply --dry-run=client -f -
+	kubectl kustomize k8s/base | kubectl apply --dry-run=client -f -
+	kubectl kustomize k8s/overlays/prod.example | kubectl apply --dry-run=client -f -
