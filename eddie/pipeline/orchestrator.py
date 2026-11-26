@@ -941,15 +941,21 @@ def export_telemetry(settings: Settings) -> str:
 
 
 def status_report(settings: Settings, *, db: Path | None = None) -> dict[str, Any]:
-    live = settings.backend == "ember"
-    paths_ = RunPaths.for_settings(settings, live=live, db=db)
+    """The live database unless --db names another (a rehearsal's); spend always from the real ledger.
+
+    A plain shell has no EDDIE_BACKEND=ember, so keying either choice on the backend showed the mock
+    rehearsal and $0 right after a live run.
+    """
+    live_db = RunPaths.for_settings(settings, live=True).db
+    paths_ = RunPaths.for_settings(settings, live=True, db=db)
+    kind = "live" if paths_.db.resolve() == live_db.resolve() else "other"
     if not paths_.db.exists():
-        return {"db": str(paths_.db), "phases": {}}
+        return {"db": str(paths_.db), "kind": kind, "phases": {}}
     store = ArtifactStore(paths_.db)  # opening as a writer also rolls back a crashed writer's journal
-    report: dict[str, Any] = {"db": str(paths_.db), "phases": {}}
+    report: dict[str, Any] = {"db": str(paths_.db), "kind": kind, "phases": {}}
     for phase in PHASES:
         report["phases"][phase] = {"steps": summarize(store, phase),
-                                   "spent_usd": phase_spend_nano(ledger_path_for(settings), phase) / NANO_PER_USD}
+                                   "spent_usd": phase_spend_nano(settings.ledger_path, phase) / NANO_PER_USD}
     with store.read() as con:
         report["rows"] = {t: dict(con.execute(f"SELECT source, COUNT(*) FROM {t} GROUP BY source").fetchall())
                           for t in ("triage", "intuitions", "witnesses", "reviews", "chapters", "witness_attempts")}

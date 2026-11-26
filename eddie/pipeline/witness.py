@@ -28,7 +28,9 @@ if TYPE_CHECKING:
 
 WORKER_MAX = 12_288
 WORKER_MAX_HIGH = 16_384
-CRITIC_MAX = 2_048
+# The region's ceiling. On the live calibrate run reasoning was 80-100% of every R2 reply, and at
+# 2,048 one review spent 2,046 tokens reasoning and was cut off before its verdict.
+CRITIC_MAX = 4_096
 CRITIC_MAX_SIDE = 1_280
 STDERR_TAIL = 1_200
 

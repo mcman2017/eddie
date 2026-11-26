@@ -25,7 +25,7 @@ from eddie.ingest.synthetic import write_sample_tree
 from eddie.llm.estimate import estimate_body
 from eddie.llm.gateway import EddieLLMGateway
 from eddie.pipeline import rehearsal
-from eddie.pipeline.forecast import forecast
+from eddie.pipeline.forecast import Forecast, forecast
 from eddie.pipeline.orchestrator import (
     RunOptions,
     StopRun,
@@ -150,8 +150,8 @@ def test_calibrate_rehearsal_writes_chapter_20_and_resumes_with_no_new_calls(wor
     assert {r[0] for r in rows(db, "SELECT region FROM reviews")} == {"R2.critic", "R3.arbiter"}
     again = run(settings, RunOptions(phase="calibrate"), sandbox=runner, log=quiet)
     assert again.stopped is None and again.calls == 0  # everything was done: nothing is called twice
-    report = status_report(settings)
-    assert report["phases"]["calibrate"]["steps"]["consolidate"] == {"done": 1}
+    report = status_report(settings, db=db)  # a rehearsal is inspected with --db; status defaults to the live run
+    assert report["kind"] == "other" and report["phases"]["calibrate"]["steps"]["consolidate"] == {"done": 1}
 
 
 def test_a_crashed_run_resumes_without_paying_twice_for_any_call(world):
@@ -280,3 +280,47 @@ def test_an_unusable_chapter_reply_is_retried_once_at_medium(world):
     assert [b["reasoning"]["effort"] for b in r4] == ["high", "medium"]
     db = data / "state" / "eddie_artifacts.sqlite"
     assert rows(db, "SELECT COUNT(*) FROM chapters WHERE source = 'ember'")[0][0] == 1
+
+
+# --- found on the first live calibrate run ----------------------------------------------------------------
+
+
+def test_status_shows_the_live_database_and_real_spend_from_a_plain_shell(world, monkeypatch):
+    from eddie.llm.policy import REGION_POLICY
+    from eddie.pipeline import orchestrator
+    from eddie.pipeline.witness import CRITIC_MAX
+    from eddie.state.artifacts import ArtifactStore
+
+    data, _ = world
+    settings = load_settings()  # what a plain `uv run` gets: the mock backend
+    assert settings.backend != "ember"
+    (data / "state").mkdir(parents=True, exist_ok=True)
+    live, rehearsal = data / "state" / "eddie_artifacts.sqlite", data / "state" / "rehearsal.sqlite"
+    ArtifactStore(live).ensure_step(phase="calibrate", step_key="r4:main", tag="d3:calibrate:x:a0", kind="consolidate",
+                                    source="ember")
+    ArtifactStore(rehearsal)
+    seen = []
+    monkeypatch.setattr(orchestrator, "phase_spend_nano", lambda ledger, phase: seen.append(ledger) or 20_583_000)
+    report = orchestrator.status_report(settings)
+    assert Path(report["db"]) == live and report["kind"] == "live"
+    assert report["phases"]["calibrate"]["steps"] and report["phases"]["calibrate"]["spent_usd"] == pytest.approx(0.020583)
+    assert set(seen) == {settings.ledger_path}  # never the shadow ledger a mock rehearsal writes
+    assert orchestrator.status_report(settings, db=rehearsal)["kind"] == "other"
+    assert 2_048 < CRITIC_MAX <= REGION_POLICY["R2.critic"].max_output_ceiling
+
+
+def test_the_forecast_expects_the_measured_output_whatever_the_ceiling():
+    measured = {"R2.critic": (0.5, 1_600.0)}
+    expected = []
+    for cap in (2_048, 4_096, 8_192):
+        fc = Forecast("full-atlas", measured=measured)
+        fc.add("R2.critic", 2_000, cap)
+        expected.append(fc.expected_nano)
+    assert expected[0] == expected[1] == expected[2]  # a reasoning reply does not grow with its ceiling
+    capped = Forecast("full-atlas", measured=measured)
+    capped.add("R2.critic", 2_000, 1_024)
+    assert capped.expected_nano < expected[0]  # but it never exceeds the ceiling of the call
+    before = [Forecast("calibrate") for _ in range(2)]  # before calibrate: the stated share of the cap
+    before[0].add("R2.critic", 2_000, 2_048)
+    before[1].add("R2.critic", 2_000, 4_096)
+    assert before[1].expected_nano > before[0].expected_nano
