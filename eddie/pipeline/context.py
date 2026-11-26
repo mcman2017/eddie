@@ -19,6 +19,7 @@ NEIGHBOURS = 8
 CARRY_INTUITION = 2_000
 CARRY_CODE = 6_000
 CARRY_CRITIQUE = 1_500
+CARRY_HISTORY = 3_000  # a repair pass: every defect of every earlier attempt
 TRUNCATED = " …[truncated]"
 
 

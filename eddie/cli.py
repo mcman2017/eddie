@@ -815,7 +815,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser("run-ember", help="the 4-region Ember pipeline: --phase calibrate, then --phase full-atlas")
     p.add_argument("action", nargs="?", default="run", choices=["run", "status", "audit"])
-    p.add_argument("--phase", choices=["calibrate", "full-atlas"])
+    p.add_argument("--phase", choices=["calibrate", "full-atlas", "repair"])
     p.add_argument("--dry-run", action="store_true", help="forecast the phase's worst case and expected cost; calls nothing")
     p.add_argument("--concurrency", type=int, default=3)
     p.add_argument("--only", help="one chapter slug")

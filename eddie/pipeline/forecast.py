@@ -13,6 +13,7 @@ Nothing here constructs a gateway or writes any ledger.
 from __future__ import annotations
 
 import sqlite3
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -29,6 +30,7 @@ from eddie.pipeline.calls import TAG_PREFIX, build_request, text_part
 from eddie.pipeline.context import (
     CARRY_CODE,
     CARRY_CRITIQUE,
+    CARRY_HISTORY,
     CARRY_INTUITION,
     card,
     neighbours,
@@ -44,10 +46,12 @@ from eddie.pipeline.orchestrator import (
     _facts_text,
     _triage_prompt,
     batch_key,
+    flagship_ref,
     phase_spend_nano,
+    unverified_flagships,
 )
 from eddie.pipeline.select import open_cone, select
-from eddie.pipeline.witness import CRITIC_MAX, schedule
+from eddie.pipeline.witness import CRITIC_MAX, WORKER_MAX_HIGH, schedule
 from eddie.planner.chapters import chapter_facts
 
 # Before any pipeline call has settled: typical input as a share of the byte bound, and output
@@ -55,6 +59,9 @@ from eddie.planner.chapters import chapter_facts
 DEFAULT_IN = {"R1.triage": 0.33, "R1.worker": 0.35, "R2.critic": 0.25, "R3.arbiter": 0.33, "R4.consolidator": 0.33}
 DEFAULT_OUT = {"R1.triage": 0.63, "R1.worker": 0.41, "R2.critic": 0.59, "R3.arbiter": 0.61, "R4.consolidator": 0.40}
 EXPECTED_REPAIRS = 0.7
+# the repair phase: how likely each of its high-effort attempts is to be needed, and its chapter rewrite
+REPAIR_WEIGHTS = (1.0, 0.6, 0.4)
+REPAIR_REWRITE_WEIGHT = 0.7
 PNG_BOUND = image_tokens_upper(1280, 760)
 FILL_WORDS = " ".join(["word"] * 60)
 
@@ -191,6 +198,13 @@ def forecast(settings: Settings, opts: RunOptions) -> Forecast:
                           max_output=max_out, instructions=instructions, parts=parts, schema=schema, summary=summary)
         return bound_tokens(r) + (PNG_BOUND if image else 0)
 
+    if phase == "repair":
+        con = open_cone(paths_.cone, paths_.index)
+        try:
+            repair_lines(fc, req, con, sel, done, paths_.db, opts)
+        finally:
+            con.close()
+        return fc
     calibrate = phase == "calibrate"
     plans = [p for p in sel.pillars if (p.slug == sel.main_slug) == calibrate]
     if opts.only:
@@ -253,16 +267,58 @@ def forecast(settings: Settings, opts: RunOptions) -> Forecast:
                     fc.add("R3.arbiter", req("R3.arbiter", opts.arbiter_effort, ARBITER_MAX, prompts.ARBITER, text, "arbiter",
                                              summary="concise"), ARBITER_MAX, weight=1.0 if attempt == 0 else 0.0)
             if f"r4:{plan.slug}" not in done and plan.slug in facts:
-                text = "\n".join([_facts_text(facts[plan.slug]), *(f"- `{d.full_name}`: {FILL_WORDS}" for d in plan.triage[:40]),
-                                  "x" * CARRY_INTUITION, *(f"witness: {FILL_WORDS}" for _ in range(3)),
-                                  "Allowed: " + ", ".join(d.full_name for d in plan.triage)])
-                for attempt in range(2):
-                    fc.add("R4.consolidator", req("R4.consolidator", "high" if attempt == 0 else "medium", R4_MAX,
-                                                  prompts.CONSOLIDATOR, text, "chapter"), R4_MAX,
-                           weight=1.0 if attempt == 0 else 0.15)
+                chapter_lines(fc, req, facts[plan.slug], plan, weight=1.0)
     finally:
         con.close()
     return fc
+
+
+def chapter_lines(fc: Forecast, req: Callable[..., int], fact: dict[str, Any], plan: Any, *, weight: float) -> None:
+    """One R4 chapter at its caps: the high-effort call and the medium retry."""
+    text = "\n".join([_facts_text(fact), *(f"- `{d.full_name}`: {FILL_WORDS}" for d in plan.triage[:40]),
+                      "x" * CARRY_INTUITION, *(f"witness: {FILL_WORDS}" for _ in range(3)),
+                      "Allowed: " + ", ".join(d.full_name for d in plan.triage)])
+    for attempt in range(2):
+        fc.add("R4.consolidator", req("R4.consolidator", "high" if attempt == 0 else "medium", R4_MAX,
+                                      prompts.CONSOLIDATOR, text, "chapter"), R4_MAX,
+               weight=weight * (1.0 if attempt == 0 else 0.15))
+
+
+def repair_lines(fc: Forecast, req: Callable[..., int], con: sqlite3.Connection, sel: Any, done: set[str], db: Path,
+                 opts: RunOptions) -> None:
+    """The repair phase: every flagship still without a verified witness, three high-effort attempts each at
+    their caps, and one R4 rewrite per chapter (the worst case assumes every flagship verifies)."""
+    todo: list[tuple[str, str]] = []
+    if db.exists():
+        art = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
+        try:
+            todo = unverified_flagships(art, "ember")
+        except sqlite3.OperationalError:
+            todo = []
+        finally:
+            art.close()
+    if opts.only:
+        todo = [t for t in todo if t[0] == opts.only]
+    plans = {p.slug: p for p in sel.pillars}
+    facts = {f["slug"]: f for f in chapter_facts(con)}
+    chapters: set[str] = set()
+    for slug, decl in todo:
+        plan = plans.get(slug)
+        t = flagship_ref(sel, plan, decl) if plan else None
+        if t is None or f"repair:{decl}" in done:
+            continue
+        tc, nbs = card(con, t.id), neighbours(con, t.id)
+        base = "\n".join([render(tc, label="target"), f"gloss: {FILL_WORDS}", *(render(n, with_context=False) for n in nbs)])
+        text = "\n".join([base, prompts.REPAIR_PASS, "x" * (CARRY_CODE + CARRY_HISTORY)])
+        crit = "\n".join([render(tc, with_context=False), f"caption: {FILL_WORDS}", "qc {}"])
+        for weight in REPAIR_WEIGHTS:
+            fc.add("R1.worker", req("R1.worker", "high", WORKER_MAX_HIGH, prompts.WORKER, text, "worker"), WORKER_MAX_HIGH,
+                   weight=weight)
+            fc.add("R2.critic", req("R2.critic", "medium", CRITIC_MAX, prompts.CRITIC, crit, "critic", image=True),
+                   CRITIC_MAX, weight=weight)
+        if slug not in chapters and f"r4:{slug}:repair" not in done and slug in facts:
+            chapters.add(slug)
+            chapter_lines(fc, req, facts[slug], plan, weight=REPAIR_REWRITE_WEIGHT)
 
 
 def render_forecast(fc: Forecast) -> list[str]:

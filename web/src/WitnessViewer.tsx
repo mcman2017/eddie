@@ -73,7 +73,8 @@ export function WitnessViewer({ witnesses, reviews, receipts, attempts }: {
             {attempts.map((a) => (
               <li key={`${a.attempt}-${a.origin}`}>
                 <b>Attempt {a.attempt + 1}</b>
-                {a.origin === "calibration_draft" ? " (calibration draft, written without the plot checklist)" : ""}:{" "}
+                {a.origin === "calibration_draft" ? " (calibration draft, written without the plot checklist)" : ""}
+                {a.origin === "repair" ? " (repair pass)" : ""}:{" "}
                 {OUTCOME[a.outcome] ?? a.outcome}
                 {a.effort ? `, ${a.effort} effort` : ""}
                 {a.critique && a.critique.length > 0 && (
