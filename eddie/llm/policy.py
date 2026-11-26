@@ -25,7 +25,8 @@ class RegionPolicy:
 # Widened on purpose so Night 2 can escalate effort progressively.
 # `none` and implicit `max` are impossible everywhere.
 REGION_POLICY: Mapping[str, RegionPolicy] = {
-    "R1.triage": RegionPolicy(frozenset({"minimal", "low"}), 2_048),
+    # 4,096 so one structured triage batch can carry 15 to 25 declarations (Day 3)
+    "R1.triage": RegionPolicy(frozenset({"minimal", "low"}), 4_096),
     "R1.worker": RegionPolicy(frozenset({"low", "medium", "high"}), 16_384),
     "R2.critic": RegionPolicy(frozenset({"low", "medium", "high"}), 4_096),
     "R3.arbiter": RegionPolicy(frozenset({"high", "xhigh", "max"}), 32_768, required_summary="concise"),

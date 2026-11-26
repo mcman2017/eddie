@@ -79,6 +79,7 @@ sys.addaudithook(_guard)
 _SCRUBBED_ENV = (
     "META_API_KEY",
     "META_API_KEY_FILE",
+    "EDDIE_KEY_FD",
     "EDDIE_ALLOW_LIVE_EMBER",
     "EDDIE_RUN_CAP_USD",
     "EDDIE_RUN_CAP_CONFIRM",
@@ -109,6 +110,7 @@ def offline_sandboxed_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Pa
     monkeypatch.setenv("XDG_CONFIG_HOME", str(home / ".config"))
     monkeypatch.setenv("EDDIE_CANONICAL_HOME", str(home))
     monkeypatch.setenv("EDDIE_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setenv("EDDIE_EXPORTS_DIR", str(tmp_path / "exports"))
     monkeypatch.setenv("EDDIE_BACKEND", "mock")
     return home
 

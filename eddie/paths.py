@@ -68,6 +68,11 @@ def repo_root() -> Path:
     return Path(__file__).resolve().parent.parent
 
 
+def exports_dir() -> Path:
+    """Where `eddie_ember_telemetry.json` (proof of usage) is written. Tests point it at a temp dir."""
+    return Path(os.environ.get("EDDIE_EXPORTS_DIR") or repo_root() / "exports")
+
+
 def data_dir() -> Path:
     return Path(os.environ.get("EDDIE_DATA_DIR") or repo_root() / "data")
 

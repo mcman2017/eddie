@@ -5,6 +5,8 @@
     python -m eddie.cli index build|stats|search|show|validate-spine
     python -m eddie.cli sandbox run SCRIPT.py
     python -m eddie.cli cone build|stats, plan-budget, build-landscape, seed-demo
+    python -m eddie.cli [--run-cap-usd X] run-ember --phase calibrate|full-atlas [--dry-run]
+    python -m eddie.cli run-ember status|audit
 """
 
 from __future__ import annotations
@@ -12,6 +14,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import os
 import sys
 from collections.abc import Callable
 from pathlib import Path
@@ -188,7 +191,7 @@ def cmd_budget_export(args: argparse.Namespace) -> int:
     shadow = _open_shadow_ledger(settings) if args.include_shadow else None
     cap = effective_lifetime_cap_nano(caps_from_settings(settings), real.totals())
     trace = build_trace(real, lifetime_cap_nano=cap, shadow=shadow)
-    out = Path(args.out) if args.out else paths.repo_root() / "exports" / "eddie_ember_telemetry.json"
+    out = Path(args.out) if args.out else paths.exports_dir() / "eddie_ember_telemetry.json"
     write_json_atomic(out, trace)
     write_json_atomic(settings.public_dir / "telemetry.json", trace)
     _out(f"wrote {out} ({trace['totals']['calls']} billable calls, total ${trace['totals']['total_spend_usd']:.6f})")
@@ -577,6 +580,71 @@ def cmd_sandbox_run(args: argparse.Namespace) -> int:
     return 0 if res.status == "ok" else 5
 
 
+# --- run-ember (the Day 3 pipeline) -------------------------------------------------------------------
+
+
+def cmd_run_ember(args: argparse.Namespace) -> int:
+    from eddie.pipeline.orchestrator import RunOptions, StopRun, audit, run, status_report
+
+    settings = _settings(args)
+    db = Path(args.db) if args.db else None
+    if args.action == "status":
+        report = status_report(settings, db=db)
+        if args.json:
+            _out(json.dumps(report, indent=2, default=str))
+            return 0
+        _out(f"run-ember     {report['db']}  (backend {settings.backend})")
+        for phase, info in report.get("phases", {}).items():
+            steps = ", ".join(f"{kind} " + "/".join(f"{n} {st}" for st, n in sorted(c.items()))
+                              for kind, c in sorted(info["steps"].items()) if kind != "call")
+            _out(f"  {phase:<11} spent ${info['spent_usd']:.6f}   {steps or 'not started'}")
+        for table, by_source in (report.get("rows") or {}).items():
+            _out(f"  {table:<17} " + (", ".join(f"{src} {n}" for src, n in sorted(by_source.items())) or "empty"))
+        if report.get("structured") == "0":
+            _out("  mode          prompt-JSON (the model refused structured output)")
+        return 0
+    if args.action == "audit":
+        problems = audit(settings, db=db)
+        for p_ in problems:
+            _out(f"PROBLEM  {p_}")
+        _out("audit: every Ember row matches a settled, billable, tagged ledger call" if not problems
+             else f"audit: {len(problems)} problem(s)")
+        return 0 if not problems else 1
+    if not args.phase:
+        raise ConfigError("run-ember needs --phase calibrate or --phase full-atlas")
+    if not 1 <= args.batch_size <= 25:
+        raise ConfigError("--batch-size must be within 1..25")
+    if not 1 <= args.concurrency <= 4:
+        raise ConfigError("--concurrency must be within 1..4 (the ledger admits 4 calls in flight)")
+    opts = RunOptions(
+        phase=args.phase, dry_run=args.dry_run, concurrency=args.concurrency, only=args.only, max_calls=args.max_calls,
+        calibration_pair=not args.no_calibration_pair, triage_effort=args.triage_effort,
+        arbiter_effort=args.arbiter_effort, structured=False if args.no_structured else None, force=args.force,
+        sandbox=args.sandbox, sandbox_image=args.sandbox_image, batch_size=args.batch_size, db=db,
+    )
+    if args.dry_run:
+        from eddie.pipeline.forecast import as_json, forecast, render_forecast
+
+        fc = forecast(settings, opts)
+        _out(json.dumps(as_json(fc), indent=2) if args.json else "\n".join(render_forecast(fc)))
+        return 0
+    try:
+        summary = run(settings, opts, log=_out)
+    except StopRun as exc:
+        _err(f"refused: {exc.reason}")
+        return 2
+    cost = "$0 (mock rehearsal)" if settings.backend == "mock" else format_usd(summary.cost_nano)
+    _out(f"run-ember {summary.phase}: {summary.calls} calls, {cost}")
+    for kind, counts in sorted(summary.steps.items()):
+        if kind != "call":
+            _out(f"  {kind:<12} " + ", ".join(f"{n} {st}" for st, n in sorted(counts.items())))
+    for note in summary.notes:
+        _out(f"  {note}")
+    if summary.stopped:
+        _out(f"  stopped: {summary.stopped}" + ("" if summary.hard else "  (re-run the same command to resume)"))
+    return summary.exit_code
+
+
 # --- parser ---------------------------------------------------------------------------------
 
 
@@ -707,6 +775,25 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--no-postprocess", action="store_true")
     p.set_defaults(func=cmd_sandbox_run)
 
+    p = sub.add_parser("run-ember", help="the 4-region Ember pipeline: --phase calibrate, then --phase full-atlas")
+    p.add_argument("action", nargs="?", default="run", choices=["run", "status", "audit"])
+    p.add_argument("--phase", choices=["calibrate", "full-atlas"])
+    p.add_argument("--dry-run", action="store_true", help="forecast the phase's worst case and expected cost; calls nothing")
+    p.add_argument("--concurrency", type=int, default=3)
+    p.add_argument("--only", help="one chapter slug")
+    p.add_argument("--max-calls", type=int, help="stop scheduling after this many model calls")
+    p.add_argument("--no-calibration-pair", action="store_true", help="skip calibrate's checklist-free first draft")
+    p.add_argument("--triage-effort", choices=["low", "minimal"], default="low")
+    p.add_argument("--arbiter-effort", choices=["high", "xhigh"], default="high")
+    p.add_argument("--no-structured", action="store_true", help="prompt-JSON mode (no text.format)")
+    p.add_argument("--force", action="store_true", help="full-atlas without a finished calibrate")
+    p.add_argument("--sandbox", choices=["docker", "process"], help="default: docker for live Ember, process otherwise")
+    p.add_argument("--sandbox-image", default="eddie-sandbox:local")
+    p.add_argument("--batch-size", type=int, default=18, help="declarations per R1.triage call (1..25)")
+    p.add_argument("--db", help="artifacts database (default: the canonical one live, rehearsal.sqlite otherwise)")
+    p.add_argument("--json", action="store_true")
+    p.set_defaults(func=cmd_run_ember)
+
     for register in _EXTRA_COMMANDS:
         register(sub)
     return parser
@@ -715,7 +802,29 @@ def build_parser() -> argparse.ArgumentParser:
 _EXTRA_COMMANDS: list[Callable[[argparse._SubParsersAction], None]] = []
 
 
+def _live_process_hardening() -> None:
+    """Take the key off its pipe for every command, and on the live path make this process
+    non-dumpable, so other processes of the same user cannot read its /proc entries."""
+    from eddie.llm.transport import take_key_fd
+
+    try:
+        take_key_fd()
+    except GuardError as exc:
+        _err(f"refused: {exc}")
+        raise SystemExit(2) from exc
+    if os.environ.get("EDDIE_BACKEND", "").strip().lower() == "ember" and sys.platform == "linux":
+        try:
+            import ctypes
+
+            libc = ctypes.CDLL(None, use_errno=True)
+            if libc.prctl(4, 0, 0, 0, 0) != 0:  # PR_SET_DUMPABLE = 4
+                _err("warning: could not make this process non-dumpable")
+        except OSError:
+            _err("warning: could not make this process non-dumpable")
+
+
 def main(argv: list[str] | None = None) -> int:
+    _live_process_hardening()
     parser = build_parser()
     args = parser.parse_args(argv)
     try:
