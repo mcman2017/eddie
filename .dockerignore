@@ -20,6 +20,11 @@ eddie_ember_telemetry.json
 *.zst
 *.partial
 *.sqlite
+*.mp4
+*.m4v
+*.mov
+*.mkv
+*.webm
 *.sqlite-*
 *.db
 .venv/

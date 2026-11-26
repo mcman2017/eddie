@@ -29,6 +29,7 @@ spec:
         runAsUser: 10001
         runAsGroup: 10001
         fsGroup: 10001
+        fsGroupChangePolicy: OnRootMismatch  # never chown 1.7 GB of data on every start
         seccompProfile:
           type: RuntimeDefault
       containers:
@@ -41,10 +42,17 @@ spec:
           env:
             - name: EDDIE_BACKEND
               value: mock
+            # everything is read through the `current` release symlink (see pvc.yaml)
+            - name: EDDIE_DATA_DIR
+              value: /data/current
             - name: EDDIE_INDEX_PATH
-              value: /data/index/eddie_index.sqlite
+              value: /data/current/index/eddie_index.sqlite
             - name: EDDIE_PUBLIC_DIR
-              value: /public
+              value: /data/current/public
+            - name: EDDIE_MEDIA_DIR
+              value: /data/current/media
+            - name: EDDIE_DOCS
+              value: "0"
           securityContext:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true
@@ -53,11 +61,11 @@ spec:
                 - ALL
           resources:
             requests:
-              cpu: 50m
-              memory: 128Mi
+              cpu: 100m
+              memory: 256Mi
             limits:
-              cpu: "1"
-              memory: 512Mi
+              cpu: "2"
+              memory: 1536Mi  # the page cache of a 1.7 GB data set counts against the limit
           readinessProbe:
             httpGet:
               path: /healthz
@@ -72,7 +80,14 @@ spec:
           volumeMounts:
             - name: tmp
               mountPath: /tmp
+            - name: data
+              mountPath: /data
+              readOnly: true
       volumes:
         - name: tmp
           emptyDir:
             sizeLimit: 64Mi
+        - name: data
+          persistentVolumeClaim:
+            claimName: eddie-data
+            readOnly: true

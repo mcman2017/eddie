@@ -6,6 +6,7 @@ labels:
       app.kubernetes.io/part-of: eddie
 resources:
   - namespace.yaml
+  - pvc.yaml
   - deployment.yaml
   - service.yaml
   - ingress.yaml

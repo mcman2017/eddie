@@ -1,0 +1,15 @@
+# The explorer's data: index, cone, artifacts database, landscape, film. Filled by
+# `scripts/deploy_prod.sh sync` through a short-lived loader pod; the web pod mounts it read-only.
+# Releases live in /data/releases/<id>/ and /data/current is a relative symlink swapped atomically.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: eddie-data
+  labels:
+    app.kubernetes.io/name: eddie
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 5Gi

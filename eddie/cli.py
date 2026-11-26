@@ -645,6 +645,43 @@ def cmd_run_ember(args: argparse.Namespace) -> int:
     return summary.exit_code
 
 
+# --- release (a read-only data release for the cluster) -------------------------------------------------
+
+
+def cmd_release_build(args: argparse.Namespace) -> int:
+    from eddie.release import ReleaseError, build_release
+
+    settings = load_settings()
+    try:
+        info = build_release(settings, Path(args.out))
+    except ReleaseError as exc:
+        raise ConfigError(str(exc)) from exc
+    _out(json.dumps(info) if args.json else
+         f"release {info['id']}: {info['files']} files, {info['bytes'] / 1e9:.2f} GB, {info['artifacts']} artifacts, "
+         f"media {info['media_mode'] or 'none'}" + (f"; {len(info['missing_artifacts'])} referenced artifacts missing"
+                                                     if info["missing_artifacts"] else ""))
+    return 0
+
+
+# --- media (the demo film) ----------------------------------------------------------------------------
+
+
+def cmd_media_sync(args: argparse.Namespace) -> int:
+    from eddie import media
+    from eddie.media_sync import SyncError, sync_local, sync_youtube
+
+    target = Path(args.media_dir) if args.media_dir else media.media_dir()
+    try:
+        if args.youtube:
+            sync_youtube(args.youtube, media_dir=target, log=_out, poster_at=args.poster_at)
+        else:
+            sync_local(media_dir=target, demo_dir=Path(args.demo_dir).expanduser(), src=Path(args.src) if args.src else None,
+                       poster_at=args.poster_at, log=_out)
+    except (SyncError, media.MediaError) as exc:
+        raise ConfigError(str(exc)) from exc
+    return 0
+
+
 # --- parser ---------------------------------------------------------------------------------
 
 
@@ -793,6 +830,21 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--db", help="artifacts database (default: the canonical one live, rehearsal.sqlite otherwise)")
     p.add_argument("--json", action="store_true")
     p.set_defaults(func=cmd_run_ember)
+
+    rel = sub.add_parser("release", help="read-only data releases for the cluster").add_subparsers(dest="action", required=True)
+    p = rel.add_parser("build", help="stage index, cone, artifacts, landscape and film into a release directory")
+    p.add_argument("--out", required=True)
+    p.add_argument("--json", action="store_true")
+    p.set_defaults(func=cmd_release_build)
+
+    med = sub.add_parser("media", help="the demo film shown in the explorer").add_subparsers(dest="action", required=True)
+    p = med.add_parser("sync", help="copy the latest cut into data/media/, or switch to the YouTube upload")
+    p.add_argument("--src", help="a specific .mp4 (default: the film project's final cut, else its 720p draft)")
+    p.add_argument("--demo-dir", default="~/eddie-demo", help="the film project (only ever read)")
+    p.add_argument("--youtube", help="a YouTube URL or video ID: embed the public upload instead of serving the MP4")
+    p.add_argument("--poster-at", type=float, default=4.0, help="seconds into the film for the poster frame")
+    p.add_argument("--media-dir", help="default: EDDIE_MEDIA_DIR or data/media")
+    p.set_defaults(func=cmd_media_sync)
 
     for register in _EXTRA_COMMANDS:
         register(sub)

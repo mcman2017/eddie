@@ -34,6 +34,13 @@ initial-prompt.md
 prompt-*.md
 .hygiene-blocklist
 
+# Video (the demo film lives in git-ignored data/media/)
+*.mp4
+*.m4v
+*.mov
+*.mkv
+*.webm
+
 # Telemetry exports (copied in deliberately at submission time, if ever)
 exports/
 eddie_ember_telemetry.json
@@ -59,3 +66,6 @@ web/dist/
 .idea/
 .vscode/
 *.swp
+
+# The real production overlay names the real host and registry: never tracked
+k8s/overlays/prod/
