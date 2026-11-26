@@ -21,6 +21,7 @@ from fastapi.responses import FileResponse
 from eddie import paths
 from eddie.api.atlas import register as register_atlas
 from eddie.api.atlas import witness_json
+from eddie.api.media import register as register_media
 from eddie.planner import chapters as ch
 
 CONE_VERSION = "2"
@@ -69,7 +70,22 @@ class ExplorerData:
         return self.artifacts_db.exists()
 
     def _mtime(self, *files: Path) -> tuple:
-        return tuple(f.stat().st_mtime if f.exists() else None for f in files)
+        """Cache key: each file's real path and mtime. In the pod the data sits behind an atomically
+        swapped `current` symlink; keying on the resolved path makes a swap visible on the next
+        request even when a file's mtime is unchanged (tar keeps mtimes)."""
+        out = []
+        for f in files:
+            real = os.path.realpath(f)
+            out.append((real, os.stat(real).st_mtime if os.path.exists(real) else None))
+        return tuple(out)
+
+    def source_available(self, con: sqlite3.Connection) -> bool:
+        """Whether proof bodies can be read here (only on the host that has the archive)."""
+        def build() -> bool:
+            row = con.execute("SELECT value FROM idx.index_meta WHERE key = 'source_root'").fetchone()
+            return bool(row) and Path(row[0]).is_dir()
+
+        return self.cached("source_available", self._mtime(self.index), build)
 
     def cached(self, key: str, deps: tuple, build):
         with self._lock:
@@ -116,6 +132,43 @@ class ExplorerData:
             return counts
 
         return self.cached("node_status", self._mtime(self.artifacts_db, self.cone), build)
+
+
+def has_table(con: sqlite3.Connection, schema: str, table: str) -> bool:
+    return con.execute(f"SELECT 1 FROM {schema}.sqlite_master WHERE type = 'table' AND name = ?", (table,)).fetchone() is not None
+
+
+def receipts(con: sqlite3.Connection, call_ids: list[str | None]) -> dict[str, dict[str, Any]]:
+    """call_id -> the display receipt of the model call that produced a row (schema 2 only)."""
+    ids = sorted({c for c in call_ids if c})
+    if not ids or not has_table(con, "art", "ember_calls"):
+        return {}
+    marks = ", ".join("?" for _ in ids)
+    out = {}
+    for r in con.execute(
+        f"SELECT call_id, backend, region, effort, response_id, status, input_tokens, cached_tokens, output_tokens, "
+        f"reasoning_tokens, cost_nano, shadow_nano, latency_ms FROM art.ember_calls WHERE call_id IN ({marks})", ids,
+    ):
+        row = dict(r)
+        row["cost_usd"] = round((row.pop("cost_nano") or 0) / 1e9, 9)
+        row["shadow_usd"] = round((row.pop("shadow_nano") or 0) / 1e9, 9)
+        out[r["call_id"]] = row
+    return out
+
+
+def review_json(v: sqlite3.Row) -> dict[str, Any]:
+    """One review in a fixed shape (schema 1 rows have no response id)."""
+    r = dict(v)
+    return {"region": r["region"], "verdict": r["verdict"], "reasons": json.loads(r["reasons"] or "[]"),
+            "source": r["source"], "witness_id": r.get("witness_id"), "call_id": r.get("call_id"),
+            "response_id": r.get("response_id")}
+
+
+def artifact_cache_header() -> str:
+    # Behind Basic Auth a shared cache (Cloudflare) must not keep these; after the unlock it may.
+    if os.environ.get("EDDIE_PUBLIC_CACHE") == "1":
+        return "public, max-age=31536000, immutable"
+    return "max-age=31536000, immutable"
 
 
 def create_router() -> APIRouter:
@@ -298,36 +351,51 @@ def create_router() -> APIRouter:
                         (decl_id,),
                     ).fetchone()
                 out["planned"] = dict(w) if w else None
+            out["source_available"] = data.source_available(con)
+            out["attempts"] = []
             if data.has_artifacts() and r["full_name"]:
                 fn = r["full_name"]
-                t = con.execute("SELECT gloss, source FROM art.triage WHERE decl_full_name = ?", (fn,)).fetchone()
+                t = con.execute("SELECT * FROM art.triage WHERE decl_full_name = ?", (fn,)).fetchone()
                 if t:
-                    out["triage"] = dict(t)
-                i = con.execute("SELECT intuition_md, verdict, arbiter_notes, source FROM art.intuitions WHERE decl_full_name = ?", (fn,)).fetchone()
+                    t = dict(t)
+                    out["triage"] = {k: t.get(k) for k in ("gloss", "source", "role", "area", "visualizability",
+                                                           "visual_hint", "call_id", "response_id")}
+                i = con.execute("SELECT * FROM art.intuitions WHERE decl_full_name = ?", (fn,)).fetchone()
                 if i:
-                    out["intuition"] = dict(i)
+                    i = dict(i)
+                    out["intuition"] = {
+                        "intuition_md": i["intuition_md"], "verdict": i["verdict"], "source": i["source"],
+                        "arbiter_notes": _json(i.get("arbiter_notes")), "citation": _json(i.get("citation")),
+                        "call_id": i.get("call_id"), "response_id": i.get("response_id"),
+                    }
                 out["witnesses"] = [
                     witness_json(w)
-                    for w in con.execute(
-                        "SELECT id, kind, title, artifact_sha256, ext, bytes, status, defects, qc, critic_verdict, supersedes_id, "
-                        "pair_id, source, python_source FROM art.witnesses WHERE decl_full_name = ? ORDER BY id",
-                        (fn,),
-                    )
+                    for w in con.execute("SELECT * FROM art.witnesses WHERE decl_full_name = ? ORDER BY id", (fn,))
                 ]
-                out["reviews"] = [
-                    {**dict(v), "reasons": json.loads(v["reasons"] or "[]")}
-                    for v in con.execute(
-                        "SELECT region, verdict, reasons, source, witness_id FROM art.reviews WHERE decl_full_name = ? ORDER BY id",
-                        (fn,),
-                    )
-                ]
+                out["reviews"] = [review_json(v) for v in con.execute(
+                    "SELECT * FROM art.reviews WHERE decl_full_name = ? ORDER BY id", (fn,))]
+                if has_table(con, "art", "witness_attempts"):
+                    out["attempts"] = [
+                        {**dict(a), "critique": _json(a["critique"]), "qc": _json(a["qc"])}
+                        for a in con.execute(
+                            "SELECT attempt, origin, effort, outcome, title, caption, relation, critique, qc, witness_id, source, "
+                            "call_id, response_id FROM art.witness_attempts WHERE decl_full_name = ? ORDER BY attempt, id", (fn,))
+                    ]
+                calls = [x.get("call_id") for x in (out["triage"] or {}, out["intuition"] or {})]
+                calls += [w.get("call_id") for w in out["witnesses"]] + [v.get("call_id") for v in out["reviews"]]
+                calls += [a.get("call_id") for a in out["attempts"]]
+                out["receipts"] = receipts(con, calls)
             if body:
-                meta = dict(con.execute("SELECT key, value FROM idx.index_meta").fetchall())
-                src = Path(meta["source_root"]) / r["path"]
-                if src.exists():
-                    with open(src, "rb") as fh:
-                        fh.seek(r["start_byte"])
-                        out["body"] = fh.read(min(r["end_byte"] - r["start_byte"], 20_000)).decode("utf-8", "replace")
+                if not out["source_available"]:
+                    out["body"] = None
+                    out["body_note"] = "The Lean source is not served from this deployment: Eddie shows statements only."
+                else:
+                    meta = dict(con.execute("SELECT key, value FROM idx.index_meta").fetchall())
+                    src = Path(meta["source_root"]) / r["path"]
+                    if src.exists():
+                        with open(src, "rb") as fh:
+                            fh.seek(r["start_byte"])
+                            out["body"] = fh.read(min(r["end_byte"] - r["start_byte"], 20_000)).decode("utf-8", "replace")
             return out
 
     @router.get("/decl/{decl_id}/neighbors")
@@ -353,7 +421,7 @@ def create_router() -> APIRouter:
         path = (data.artifact_dir / name).resolve()
         if path.parent != data.artifact_dir.resolve() or not path.is_file():
             raise HTTPException(404, "no such artifact")
-        return FileResponse(path, media_type=MEDIA[name.rsplit(".", 1)[1]], headers={"Cache-Control": "public, max-age=31536000, immutable"})
+        return FileResponse(path, media_type=MEDIA[name.rsplit(".", 1)[1]], headers={"Cache-Control": artifact_cache_header()})
 
     @router.get("/activity")
     def activity() -> dict[str, Any]:
@@ -368,4 +436,14 @@ def create_router() -> APIRouter:
         return dict(row) if row else {"region": None}
 
     register_atlas(router, data)
+    register_media(router)
     return router
+
+
+def _json(raw: Any) -> Any:
+    if raw is None or isinstance(raw, (dict, list)):
+        return raw
+    try:
+        return json.loads(raw)
+    except (TypeError, ValueError):
+        return raw

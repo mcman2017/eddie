@@ -653,3 +653,252 @@
     box-shadow: 0 0 0 1px rgba(24, 24, 27, 0.55), 0 0 0 16px rgba(217, 72, 15, 0);
   }
 }
+
+/* --- the voice-over switch, beside Play Visual Tour (not rendered in #cinema) ---------------- */
+
+.tour-row {
+  display: flex;
+  gap: 6px;
+}
+
+.tour-row .tour-play {
+  flex: 1;
+}
+
+.tour-sound {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 0 10px;
+  border: 1px solid var(--hair-strong);
+  border-radius: 8px;
+  background: var(--raised);
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.tour-sound.is-muted {
+  color: var(--dead);
+  border-style: dashed;
+}
+
+.tour-sound:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+/* --- the film: a card above the legend (or a pill), and a 16:9 lightbox --------------------- */
+
+.film-card,
+.film-pill {
+  position: absolute;
+  z-index: 2;
+  left: 18px;
+  bottom: calc(16px + var(--legend-h, 170px) + 12px);
+}
+
+.film-card {
+  width: 204px;
+  border: 1px solid var(--hair);
+  border-radius: 10px;
+  background: var(--raised);
+  box-shadow: 0 1px 3px rgba(24, 24, 27, 0.12);
+  overflow: hidden;
+}
+
+.film-open {
+  position: relative;
+  display: block;
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  padding: 0;
+  border: 0;
+  background: var(--well);
+  cursor: pointer;
+}
+
+.film-open img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.film-noposter {
+  display: grid;
+  place-items: center;
+  height: 100%;
+  padding: 8px;
+  font-weight: 700;
+  color: var(--ink);
+}
+
+.film-play {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+}
+
+.film-play circle {
+  fill: var(--raised);
+  stroke: var(--ink);
+  stroke-width: 2;
+}
+
+.film-play path {
+  fill: var(--ink);
+}
+
+.film-open:hover .film-play svg,
+.film-open:focus-visible .film-play svg {
+  transform: scale(1.06);
+}
+
+.film-caption {
+  margin: 0;
+  padding: 7px 28px 8px 10px;
+  font-size: 11px;
+  line-height: 1.35;
+  color: var(--ink);
+}
+
+.film-caption b {
+  letter-spacing: 0.04em;
+}
+
+.film-caption span {
+  color: var(--dead);
+}
+
+.film-tuck {
+  position: absolute;
+  right: 4px;
+  bottom: 4px;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--ink);
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.film-tuck:hover,
+.film-pill-expand:hover {
+  background: var(--hover);
+}
+
+.film-pill {
+  display: flex;
+  border: 1px solid var(--hair-strong);
+  border-radius: 999px;
+  background: var(--raised);
+  box-shadow: 0 1px 3px rgba(24, 24, 27, 0.12);
+  overflow: hidden;
+}
+
+.film-pill-play,
+.film-pill-expand {
+  padding: 6px 12px;
+  border: 0;
+  background: transparent;
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.film-pill-expand {
+  padding: 6px 10px;
+  border-left: 1px solid var(--hair);
+}
+
+.film-modal {
+  width: min(92vw, calc(86vh * 16 / 9));
+  max-width: none;
+  padding: 0;
+  border: 0;
+  border-radius: 12px;
+  background: var(--raised);
+  color: var(--ink);
+  box-shadow: 0 12px 48px rgba(24, 24, 27, 0.35);
+}
+
+.film-modal::backdrop {
+  background: rgba(24, 24, 27, 0.72);
+}
+
+.film-head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding: 10px 12px 10px 16px;
+  font-size: 14px;
+}
+
+.film-head span {
+  color: var(--dead);
+}
+
+.film-out {
+  margin-left: auto;
+  color: var(--ink);
+  font-size: 13px;
+}
+
+.film-close {
+  margin-left: auto;
+  width: 30px;
+  height: 30px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--ink);
+  font-size: 20px;
+  cursor: pointer;
+}
+
+.film-out + .film-close {
+  margin-left: 4px;
+}
+
+.film-close:hover {
+  background: var(--hover);
+}
+
+.film-stage {
+  aspect-ratio: 16 / 9;
+  background: #000;
+}
+
+.film-stage video,
+.film-stage iframe {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border: 0;
+}
+
+.strip.is-cinema .film-card,
+.strip.is-cinema .film-pill,
+.strip.is-cinema .tour-sound {
+  display: none;
+}
+
+/* beside the voice switch, "Play Visual Tour" stays on one line */
+.tour-row .tour-play {
+  white-space: nowrap;
+  padding: 10px 10px;
+  font-size: 14px;
+}
+
+.tour-row .tour-sound {
+  padding: 0 8px;
+  font-size: 12px;
+}

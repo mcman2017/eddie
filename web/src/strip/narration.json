@@ -1,0 +1,72 @@
+{
+  "comment": "The visual tour's voice-over. Shot windows match CUES in tour.ts (a test keeps them equal). `text` is what a viewer would read; `say` is what the narrator says (numbers and names spelled out). `at` is seconds after the shot begins. Render with `make narration`; every clip must end 0.3 s before its window does.",
+  "version": 1,
+  "margin_s": 0.3,
+  "shots": [
+    {
+      "id": "zeros",
+      "start": 0.0,
+      "end": 8.8,
+      "lines": [
+        {
+          "at": 0.1,
+          "text": "Riemann's 1859 bet: every zero of zeta, each emerald well you see, sits exactly on this gold line.",
+          "say": "Riemann's eighteen fifty-nine bet: every zero of zeta, each emerald well you see, sits exactly on this gold line."
+        }
+      ]
+    },
+    {
+      "id": "funnel",
+      "start": 8.8,
+      "end": 14.2,
+      "lines": [
+        {
+          "at": 0.1,
+          "text": "The proof: twenty chapters, each arc feeding the next, up to Main.",
+          "say": "The proof: twenty chapters, each arc feeding the next, up to Main."
+        }
+      ]
+    },
+    {
+      "id": "morph",
+      "start": 14.2,
+      "end": 21.6,
+      "lines": [
+        {
+          "at": 0.1,
+          "text": "Now the proof's own shape: a million declarations as a single wave. It pictures the code, not zeta.",
+          "say": "Now the proof's own shape: a million declarations as a single wave. It pictures the code, not zeta."
+        }
+      ]
+    },
+    {
+      "id": "compare",
+      "start": 21.6,
+      "end": 31.4,
+      "lines": [
+        {
+          "at": 0.1,
+          "text": "Colour is the live proof. Grey is the dead code it never uses.",
+          "say": "Color is the live proof. Gray is the dead code it never uses."
+        },
+        {
+          "at": 5.2,
+          "text": "Together, the outlines mark where the two differ most.",
+          "say": "Together, the outlines mark where the two differ most."
+        }
+      ]
+    },
+    {
+      "id": "summit",
+      "start": 31.4,
+      "end": 40.0,
+      "lines": [
+        {
+          "at": 0.1,
+          "text": "The summit, Main.lean. One theorem here, allChi, stands between Main and eighty-five percent of the proof.",
+          "say": "The summit, Main dot Lean. One theorem here, all-kai, stands between Main and eighty-five percent of the proof."
+        }
+      ]
+    }
+  ]
+}

@@ -28,6 +28,8 @@ const browser = spawn(chrome, [
   "--use-gl=angle", "--use-angle=swiftshader", "--enable-unsafe-swiftshader", "--ignore-gpu-blocklist",
   "--no-first-run", "--no-default-browser-check", "--disable-extensions", "--disable-sync", "--disable-component-update",
   "--disable-background-networking", "--mute-audio", "--autoplay-policy=no-user-gesture-required",
+  // nothing here may leave the machine, a YouTube embed included
+  "--host-resolver-rules=MAP *.youtube-nocookie.com ~NOTFOUND, MAP *.youtube.com ~NOTFOUND",
   "--disable-background-timer-throttling", "--disable-renderer-backgrounding", "--disable-backgrounding-occluded-windows", "about:blank",
 ], { stdio: "ignore" });
 
@@ -179,7 +181,13 @@ async function main() {
   await open(`freeze=12.5&chapter=${last}`);
   await ready();
   await until(`document.querySelector('[data-testid=chapter-guide]')?.dataset.slug === ${JSON.stringify(last)}`, "the Main chapter guide");
-  check((await evaluate("document.querySelector('[data-testid=stub-badge]')?.textContent")) === chapters[chapters.length - 1][1], "the stub badge is shown verbatim");
+  const lastSource = await evaluate(`fetch('/api/chapters/${chapters[chapters.length - 1][0]}').then((r) => r.json()).then((c) => c.source)`);
+  if (lastSource === "seed") {
+    check((await evaluate("document.querySelector('[data-testid=stub-badge]')?.textContent")) === chapters[chapters.length - 1][1], "the stub badge is shown verbatim");
+  } else {
+    check(await evaluate("!document.querySelector('[data-testid=stub-badge]') && !!document.querySelector('[data-testid=source-badge]')"),
+      `a chapter written by ${lastSource} carries its source badge, not the stub badge`);
+  }
   check((await evaluate("document.querySelectorAll('.guide .figure').length")) >= 1, "the Main chapter shows its witnesses");
   check((await evaluate("!!document.querySelector('.guide .segmented')")), "the rejected-vs-verified toggle is present");
   await shot("10-chapter-main");
@@ -282,6 +290,81 @@ async function main() {
   check(await click("[data-testid=pop-dead]"), "clicked Dead code on a running page");
   await until("window.__eddieStrip.state().popLevel === 1 && window.__eddieStrip.settled()", "the surface to reach the dead population");
   check((await evaluate("window.__eddieStrip.state().popLevel")) === 1, "the live cross-fade to the dead wave completes");
+
+  // 8) the voice-over, on a running clock (a frozen page never starts it): one live case per control
+  await open("");
+  await ready();
+  const nar = "window.__eddieNarration?.state()";
+  check(await evaluate("!!document.querySelector('[data-testid=tour-sound]')"), "the voice switch sits beside Play Visual Tour");
+  check(await click("[data-testid=tour-play]"), "started the tour with the voice on");
+  await until(`${nar}?.playing === 0 && ${nar}?.source === 'file'`, "the first shot's clip to play from its file", 30000);
+  check(await click("[data-testid=tour-sound]"), "muted the voice mid-shot");
+  await until(`${nar}?.muted === true && ${nar}?.playing === 0`, "the muted clip to keep running in silence");
+  check(await click("[data-testid=tour-sound]"), "turned the voice back on");
+  await until(`${nar}?.muted === false && ${nar}?.playing === 0`, "the voice to rejoin the same clip in place");
+  await press("Escape", 27);
+  await until(`${nar}?.playing === null`, "Escape to stop the narration");
+  check(await click('[data-testid=shot-pill][data-shot="morph"]'), "clicked pill 3");
+  await until(`${nar}?.playing === 2`, "pill 3 to tell its own shot");
+  await send("Input.dispatchMouseEvent", { type: "mouseMoved", x: 900, y: 620, button: "none" });
+  await send("Input.dispatchMouseEvent", { type: "mousePressed", x: 900, y: 620, button: "left", clickCount: 1 });
+  for (let k = 1; k <= 6; k++) await send("Input.dispatchMouseEvent", { type: "mouseMoved", x: 900 + 25 * k, y: 620 + 6 * k, button: "left", buttons: 1 });
+  await send("Input.dispatchMouseEvent", { type: "mouseReleased", x: 1050, y: 656, button: "left", clickCount: 1 });
+  await until(`${nar}?.playing === null`, "a camera drag to stop the narration");
+  const manifest = await evaluate("fetch('/audio/tour/narration.json').then((r) => r.json())");
+  const cueList = (await evaluate("window.__eddieStrip.tour()")).cues;
+  const windows = manifest.shots.map((clip) => {
+    const first = cueList.findIndex((c) => c.shot === clip.id);
+    const nextShot = cueList.findIndex((c, i) => i > first && c.shot !== clip.id);
+    return (nextShot < 0 ? tour.duration : cueList[nextShot].from) - cueList[first].from;
+  });
+  check(manifest.shots.every((clip, i) => clip.duration_s <= windows[i] - manifest.margin_s),
+    `every clip ends inside its shot (${manifest.shots.map((c, i) => `${c.duration_s.toFixed(1)}/${windows[i].toFixed(1)} s`).join(", ")}; voice ${manifest.voice})`);
+  await open("cinema");
+  await ready();
+  check(await evaluate("!document.querySelector('[data-testid=tour-sound]')"), "cinema: no voice switch in the frame");
+  check(await click("[data-testid=tour-play]"), "cinema: started the tour");
+  await until("window.__eddieStrip.tour().playing && window.__eddieStrip.tour().t > 1.5", "cinema: the tour's clock to run");
+  check(await evaluate(`(${nar}?.playing ?? null) === null`), "cinema: the tour plays in silence (capture scripts hear nothing)");
+  await press("Escape", 27);
+
+  // 9) the film card and its lightbox
+  const film = await evaluate("fetch('/api/demo-video/meta').then((r) => r.json())");
+  await open("");
+  await ready();
+  if (film.available) {
+    await until("!!document.querySelector('[data-testid=film-card], [data-testid=film-pill]')", "the film card");
+    if (await evaluate("!!document.querySelector('[data-testid=film-pill] .film-pill-expand')")) await click("[data-testid=film-pill] .film-pill-expand");
+    const overlap = await evaluate(`(() => { const c = document.querySelector('[data-testid=film-card]')?.getBoundingClientRect(); if (!c) return 'no card'; return ['.strip-shots', '.strip-legend', '.strip-caption', '.strip-console'].filter((s) => { const r = document.querySelector(s)?.getBoundingClientRect(); return r && r.width > 0 && !(c.right <= r.left || r.right <= c.left || c.bottom <= r.top || r.bottom <= c.top); }).join(', '); })()`);
+    check(overlap === "", `the film card collides with nothing${overlap ? ` (it overlaps ${overlap})` : ""}`);
+    await shot("21-film-card");
+    check(await click("[data-testid=tour-play]"), "started the tour, then opened the film over it");
+    await until(`window.__eddieStrip.tour().playing && ${nar}?.playing === 0`, "the tour and its voice to run");
+    check(await click("[data-testid=film-card] .film-open"), "opened the film");
+    await until("!!document.querySelector('dialog[open][data-testid=film-modal]') && !!document.querySelector('[data-testid=film-video], [data-testid=film-iframe]')", "the lightbox and its player");
+    check(await evaluate(`window.__eddieStrip.tour().t === null && (${nar}?.playing ?? null) === null`), "opening the film stops the tour and the voice");
+    if (film.mode === "local") {
+      await until("(() => { const v = document.querySelector('[data-testid=film-video]'); return !!v && v.readyState >= 1 && v.duration > 60; })()", "the film's metadata (served with byte ranges)");
+    }
+    await sleep(400);
+    await shot("22-film-lightbox");
+    await press("Escape", 27);
+    await until("!document.querySelector('dialog[open]') && !document.querySelector('[data-testid=film-video], [data-testid=film-iframe]')", "Escape to close the film and stop its sound");
+    check(await click("[data-testid=film-card] .film-tuck"), "tucked the card away");
+    await until("!!document.querySelector('[data-testid=film-pill]')", "the pill");
+    check(await click("[data-testid=film-pill] .film-pill-play"), "the pill opens the film");
+    await until("!!document.querySelector('dialog[open]')", "the lightbox from the pill");
+    check(await click(".film-close"), "closed it with the x");
+    await until("!document.querySelector('dialog[open]')", "the x to close the film");
+    check(await click("[data-testid=film-pill] .film-pill-expand"), "brought the card back");
+    await open("cinema");
+    await ready();
+    await sleep(500);
+    check(await evaluate("!document.querySelector('[data-testid=film-card], [data-testid=film-pill], [data-testid=film-modal]')"), "cinema: no film card, pill or lightbox in the frame");
+  } else {
+    await sleep(600);
+    check(await evaluate("!document.querySelector('[data-testid=film-card], [data-testid=film-pill]')"), "no film yet: the card stays hidden");
+  }
 
   // 7) frame pacing (software GL here: an upper bound on trouble, not a prediction)
   const frames = await evaluate("new Promise((done) => { const t = []; const step = (now) => { t.push(now); if (t.length < 90) requestAnimationFrame(step); else { const d = t.slice(1).map((v, i) => v - t[i]).sort((a, b) => a - b); done({ median: d[Math.floor(d.length / 2)], p95: d[Math.floor(d.length * 0.95)] }); } }; requestAnimationFrame(step); })");

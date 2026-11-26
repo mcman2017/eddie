@@ -38,10 +38,39 @@ def _read_json(path: Path) -> dict[str, Any] | None:
         return None
 
 
+# Absolute paths in the index's metadata (they name the operator's home directory) are never served.
+PRIVATE_META = ("source_root", "project_root", "index_path")
+# Static files whose names change with their content (Vite's hashed assets) may be cached for good.
+IMMUTABLE_PREFIXES = ("/assets/",)
+SHORT_PUBLIC_PREFIXES = ("/audio/", "/api/landscape")
+
+
+def public_cache() -> bool:
+    """Only after the Basic Auth wall comes down: behind it, a shared cache must keep nothing."""
+    return os.environ.get("EDDIE_PUBLIC_CACHE") == "1"
+
+
 def create_app() -> FastAPI:
     public_dir, index_path, web_dist = _paths()
-    app = FastAPI(title="Eddie", version=__version__, docs_url="/api/docs", openapi_url="/api/openapi.json", redoc_url=None)
+    docs = os.environ.get("EDDIE_DOCS", "1") != "0"
+    app = FastAPI(title="Eddie", version=__version__, docs_url="/api/docs" if docs else None,
+                  openapi_url="/api/openapi.json" if docs else None, redoc_url=None)
     app.include_router(create_router())
+
+    @app.middleware("http")
+    async def headers(request, call_next):
+        response = await call_next(request)
+        path = request.url.path
+        # YouTube's embed needs a referrer (Error 153 without one); this is also the browsers' default.
+        response.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
+        if public_cache() and response.status_code == 200:
+            if path.startswith(IMMUTABLE_PREFIXES):
+                response.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+            elif path.startswith(SHORT_PUBLIC_PREFIXES):
+                response.headers["Cache-Control"] = "public, max-age=3600"
+            elif path.startswith("/api/") and "cache-control" not in response.headers:
+                response.headers["Cache-Control"] = "public, max-age=60"
+        return response
     stats_cache: dict[str, Any] = {}
     stats_lock = threading.Lock()
 
@@ -70,7 +99,9 @@ def create_app() -> FastAPI:
         with stats_lock:
             if stats_cache.get("mtime") != mtime or "data" not in stats_cache:
                 with index_con() as con:
-                    stats_cache["data"] = stats(con)
+                    data = stats(con)
+                data["meta"] = {k: v for k, v in data.get("meta", {}).items() if k not in PRIVATE_META}
+                stats_cache["data"] = data
                 stats_cache["mtime"] = mtime
             return stats_cache["data"]
 

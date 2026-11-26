@@ -101,7 +101,7 @@ def test_chapter_guide_has_structure_stub_text_and_the_rejected_verified_pair(cl
     assert d["witnesses"][0]["url"].startswith("/api/artifacts/") and d["witnesses"][0]["decl_full_name"] == "riemannHypothesis"
     assert client.get(d["witnesses"][0]["url"]).status_code == 200
     assert d["reviews"] == [{"region": "R2.critic", "verdict": "rejected", "reasons": ["SEED review"], "source": "seed",
-                            "witness_id": world["bad"]}]
+                            "witness_id": world["bad"], "call_id": None, "response_id": None}]
     finals = {t["full_name"]: t for t in d["final_theorems"]}
     assert list(finals)[:2] == ["riemannHypothesis", "riemannZeta_eq_zero_re"] and finals["riemannHypothesis"]["status"] == "verified"
     assert finals["riemannHypothesis"]["signature"] == "theorem riemannHypothesis : RiemannHypothesis"

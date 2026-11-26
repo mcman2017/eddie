@@ -56,6 +56,18 @@ On 2026-11-20 a formal Lean 4 proof of the Riemann Hypothesis was released: 175,
 | Plots | Sandboxed scripts get a house plot style through a packaged `MATPLOTLIBRC`, so generated code spends nothing on styling. The seed witnesses are redrawn on white, and a rejected render is shown above the one that replaced it, each under its verdict. |
 | A fix | Outside frozen screenshots the 3D view's frame time was always zero, so Live / Dead / Compare never reshaped the surface on a running page. Fixed, with a live check that fails without the fix. |
 
+### Day 3: the pipeline, a narrated tour, and the deploy
+
+| | |
+|---|---|
+| `run-ember` | The four regions on `muse-ember-1.0`, every call through the governor. `--phase calibrate` runs chapter 20 end to end (13 triaged declarations, `riemannHypothesis` and `allChi` witnesses, two R3 audits, one R4 chapter; worst case $0.09, about $0.03 expected). `--phase full-atlas` runs the other 19 chapters (about 760 triaged, about 22 witnesses, 19 audits, 19 chapters; worst case $1.14, about $0.36 expected). `--dry-run` prices every remaining call with the governor's own estimator; `status` and `audit` report progress and check every Ember row against the ledger. |
+| Never pay twice | Each call is a slot in a resumable step queue, tagged with its step in the ledger and journaled before it is settled; a resumed run reuses a settled answer instead of calling again. The run cap is a phase budget read back from the ledger. Nothing in flight is cancelled; truncated replies count as strikes; a refused `json_schema` switches to prompt-JSON. |
+| Every attempt kept | R1 writes a script, the sandbox runs it, $0 checks look at the PNG, R2 looks at it too; a rejection feeds R2's exact critique to the next attempt (medium, medium, then high effort). Calibrate starts with a draft written without the plot checklist, so the before and after is a real repair, not a staged one. |
+| Model code in a box | Witness scripts written by the model run in a container with no network and nothing mounted but the job directory. The Ember key now reaches the CLI on a pipe, not in the environment (a child process can read its parent's `/proc/<pid>/environ`). |
+| A narrated tour | Play Visual Tour speaks: five clips, one per shot, rendered locally with Kokoro-82M and timed to fit each shot. A switch beside the button mutes it in place (key M); `#cinema` and `?mute=1` stay silent. |
+| The film | "A Fistful of Tokens" opens from a card on the strip, played from this server or embedded from YouTube (a sidecar file switches modes without a restart). Never shown in `#cinema`. |
+| The deploy | `scripts/deploy_prod.sh` puts the keyless, read-only explorer on a cluster behind Basic Auth (`scripts/set_prod_auth.sh`), with data releases swapped atomically into a read-only volume; `scripts/unlock_public_submission.sh` takes the wall down on submission day. |
+
 ## The Metabolic Spend Governor
 
 Contest rule: spend above **$10** on Ember disqualifies the entry, and the dashboard's alerts do not stop traffic. Ember also defaults to `effort="max"`, and above 200K input tokens the **whole** request costs 3×. So every call passes through a governor that sits physically in the request path (`eddie/llm/`):
@@ -103,6 +115,10 @@ make cone       # declaration graph, live proof cone, pillars, chapter order -> 
 make landscape  # zeta terrain, proof wave, findings -> data/index/landscape/ (about 30 s, no model calls)
 make plan       # exact tiered Ember plan inside $6.50 -> data/index/work_plan.json (no model calls)
 make seed       # sandbox-rendered demo witnesses and 20 chapter stubs, labeled seed (never Ember output)
+make rehearse   # $0: the whole calibrate phase on the mock backend, into data/state/rehearsal.sqlite
+make sandbox-image   # the container model-written witness scripts run in
+make narration       # the tour's voice-over (Kokoro, local CPU); VOICE=bm_george or af_heart to switch
+make sync-demo-video # the film from ~/eddie-demo/out into data/media/ (read-only there)
 make dev        # API on 127.0.0.1:8765 + Vite on 127.0.0.1:5173
 node scripts/verify_strip.mjs   # headless Chrome check of the 3D view (after make web-build and make api)
 ```
@@ -144,14 +160,18 @@ Every script gets the house plot style through `MATPLOTLIBRC` (`eddie/sandbox/ed
 | `eddie/llm/` | Governor, ledger, pricing, estimator, usage parser, transport, gateway, adapters (mock/dgx/ember), telemetry |
 | `eddie/ingest/` | Fetcher, lexer, parser, import graph, index build and queries, declaration references, proof cone, zoom tree, synthetic fixtures |
 | `eddie/planner/` | Proof pillars and their chapter order, the atlas facts, the zeta/proof-wave landscape, the exact tiered budget planner |
+| `eddie/pipeline/` | `run-ember`: selection, bounded context cards, prompts and strict schemas, the witness loop, the orchestrator, the forecast, the $0 rehearsal |
+| `eddie/media.py`, `eddie/release.py` | The demo film's two modes; read-only data releases for the cluster |
 | `eddie/state/` | The mutable artifacts database (work queue, triage, intuitions, witnesses, reviews) |
 | `eddie/sandbox/` | Runner, child bootstrap, spectrogram/QC post-pass, artifact store |
 | `eddie/demo/` | `seed-demo` and its witness scripts |
 | `eddie/api/` | Read-only FastAPI app and explorer API |
 | `web/` | React/Vite explorer: the Three.js critical strip, the dependency wheel, the chapter guide, inspector, witness and audio players |
-| `k8s/` | Keyless PSA-`restricted` manifests (not applied) |
+| `k8s/` | `base/` keyless PSA-`restricted` manifests; `overlays/prod.example/` the shape of a real overlay (the real one is git-ignored) |
 | `tests/` | The offline suite |
 
 ## Data and licensing
 
 Eddie's code is MIT-licensed and was written from scratch for this hackathon. The Lean archive and companion PDFs are third-party material. They are downloaded locally into `data/`, never committed and never redistributed; `.gitignore` and a pre-commit hygiene check enforce this. Test fixtures are synthetic Lean written for this repository.
+
+The tour's narration is synthesized with [Kokoro-82M](https://huggingface.co/hexgrad/Kokoro-82M) (Apache-2.0) through `kokoro-onnx` (MIT), on a local CPU; its phonemizer (GPL-3) is a build-time tool that Eddie never imports or ships.

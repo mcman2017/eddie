@@ -1,0 +1,17 @@
+# Rendered by scripts/deploy_prod.sh render from deploy.env. Do not edit: re-render instead.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: eddie
+resources:
+  - ../../base
+images:
+  - name: ghcr.io/mcman2017/eddie
+    newName: registry.example.com/eddie
+    newTag: "latest"
+patches:
+  - target: {kind: Ingress, name: eddie}
+    path: ingress.yaml
+  - target: {kind: Deployment, name: eddie-web}
+    path: deployment.yaml
+  - target: {kind: PersistentVolumeClaim, name: eddie-data}
+    path: pvc.yaml

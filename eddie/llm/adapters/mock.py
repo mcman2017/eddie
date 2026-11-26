@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+from collections.abc import Callable
 from typing import Any
 
 import httpx
@@ -19,12 +20,20 @@ class MockAdapter:
     name = "mock"
     billable = False
 
-    def __init__(self, *, faults: list[str] | None = None, latency_s: float = 0.0) -> None:
+    def __init__(
+        self,
+        *,
+        faults: list[str] | None = None,
+        latency_s: float = 0.0,
+        responder: Callable[[dict[str, Any]], str] | None = None,
+    ) -> None:
         unknown = set(faults or []) - set(FAULTS)
         if unknown:
             raise ValueError(f"unknown mock faults: {sorted(unknown)}")
         self.faults = list(faults or [])
         self.latency_s = latency_s
+        # Rehearsals inject a responder so structured requests get schema-valid text back.
+        self.responder = responder
         self.sends = 0
 
     def check_body(self, body: dict[str, Any]) -> None:
@@ -45,6 +54,10 @@ class MockAdapter:
         pct = 40 + int(digest[0:2], 16) % 40
         input_tokens = max(1, min(res.est_input_bound, 1_000_000) * pct // 100)
         output_tokens = min(res.max_output, 32 + int(digest[2:4], 16) % 64)
+        text = f"[mock {res.region}/{res.effort}] {digest[:16]}"
+        if self.responder is not None:
+            text = self.responder(body)
+            output_tokens = min(res.max_output, max(16, len(text.encode("utf-8")) // 4))
         reasoning = output_tokens * _REASONING_PCT.get(res.effort, 0) // 100
         usage: Any = {
             "input_tokens": input_tokens,
@@ -73,7 +86,7 @@ class MockAdapter:
                 {
                     "type": "message",
                     "role": "assistant",
-                    "content": [{"type": "output_text", "text": f"[mock {res.region}/{res.effort}] {digest[:16]}"}],
+                    "content": [{"type": "output_text", "text": text}],
                 },
             ],
             "usage": usage,

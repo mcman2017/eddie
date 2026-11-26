@@ -2,7 +2,7 @@ import { useEffect, useState, type ReactNode } from "react";
 import { api, type DeclDetail, type Neighbors } from "./api";
 import { AudioWitness } from "./AudioWitness";
 import { StatusChip } from "./StatusMark";
-import { WitnessViewer } from "./WitnessViewer";
+import { ReceiptLine, WitnessViewer } from "./WitnessViewer";
 
 const SEED_PREFIX = "SEED: not an Ember translation.";
 const unseed = (text: string) => (text.startsWith(SEED_PREFIX) ? text.slice(SEED_PREFIX.length).trimStart() : text);
@@ -43,6 +43,7 @@ export function Inspector({ declId, onSelect }: { declId: number | null; onSelec
   const [detail, setDetail] = useState<DeclDetail | null>(null);
   const [neighbors, setNeighbors] = useState<Neighbors | null>(null);
   const [body, setBody] = useState<string | null>(null);
+  const [bodyNote, setBodyNote] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -50,6 +51,7 @@ export function Inspector({ declId, onSelect }: { declId: number | null; onSelec
     let live = true;
     setError(null);
     setBody(null);
+    setBodyNote(null);
     Promise.all([api.decl(declId), api.neighbors(declId)])
       .then(([d, n]) => {
         if (!live) return;
@@ -98,12 +100,67 @@ export function Inspector({ declId, onSelect }: { declId: number | null; onSelec
         {d.intuition ? (
           <div className="prose">
             {d.intuition.source === "seed" && <p className="seed-note">Seed text written for the demo, not an Ember translation.</p>}
+            {d.intuition.arbiter_notes && (
+              <p className="audit" data-testid="r3-audit">
+                <span className={`chip${d.intuition.arbiter_notes.verdict === "unfaithful" ? " chip-dashed" : ""}`}>
+                  Audited by R3:{" "}
+                  {d.intuition.arbiter_notes.verdict === "faithful"
+                    ? "faithful to the Lean statement"
+                    : d.intuition.arbiter_notes.verdict === "needs_fix"
+                      ? "corrected against the Lean statement"
+                      : "the first reading was misleading"}
+                </span>{" "}
+                confidence {d.intuition.arbiter_notes.confidence}
+              </p>
+            )}
             <Prose text={d.intuition.source === "seed" ? unseed(d.intuition.intuition_md) : d.intuition.intuition_md} />
+            {d.intuition.arbiter_notes && d.intuition.arbiter_notes.hypotheses.length > 0 && (
+              <>
+                <h3>Hypotheses, in plain English</h3>
+                <ul>
+                  {d.intuition.arbiter_notes.hypotheses.map((h) => (
+                    <li key={h.name + h.plain_english}>
+                      <code>{h.name}</code>: {h.plain_english}
+                    </li>
+                  ))}
+                </ul>
+              </>
+            )}
+            {d.intuition.arbiter_notes && d.intuition.arbiter_notes.caveats.length > 0 && (
+              <>
+                <h3>What it does not say</h3>
+                <ul>
+                  {d.intuition.arbiter_notes.caveats.map((c) => (
+                    <li key={c}>{c}</li>
+                  ))}
+                </ul>
+              </>
+            )}
+            {d.intuition.citation && d.intuition.citation.length > 0 && (
+              <p className="cite">
+                Grounded in:{" "}
+                {d.intuition.citation.map((c, k) => (
+                  <span key={c.decl}>
+                    {k > 0 ? "; " : ""}
+                    <code>{c.decl}</code> ({c.path}:{c.start_line})
+                  </span>
+                ))}
+              </p>
+            )}
+            {d.intuition.call_id && <ReceiptLine receipt={d.receipts?.[d.intuition.call_id]} />}
           </div>
         ) : d.triage ? (
           <div className="prose">
             <Prose text={d.triage.gloss} />
             {d.triage.source === "seed" && <p className="seed-note">Seed gloss, not an Ember triage.</p>}
+            {(d.triage.role || d.triage.area) && (
+              <p className="triage-tags">
+                {d.triage.role && <span className="chip">{d.triage.role.replace("_", " ")}</span>}
+                {d.triage.area && <span className="chip">{d.triage.area}</span>}
+                {d.triage.visualizability != null && <span className="chip">drawable {d.triage.visualizability}/3</span>}
+              </p>
+            )}
+            {d.triage.call_id && <ReceiptLine receipt={d.receipts?.[d.triage.call_id]} />}
           </div>
         ) : (
           <p className="muted">
@@ -121,7 +178,7 @@ export function Inspector({ declId, onSelect }: { declId: number | null; onSelec
 
       {visuals.length > 0 && (
         <Section title="What it looks like">
-          <WitnessViewer witnesses={visuals} reviews={d.reviews} />
+          <WitnessViewer witnesses={visuals} reviews={d.reviews} receipts={d.receipts} attempts={d.attempts} />
         </Section>
       )}
 
@@ -144,13 +201,18 @@ export function Inspector({ declId, onSelect }: { declId: number | null; onSelec
         <p className="cite">
           <span className="cite-path">{d.citation.path}</span>, {lines}
         </p>
-        {body == null ? (
-          <button type="button" className="link" onClick={() => api.declBody(d.id).then((r) => setBody(r.body ?? "")).catch(() => setBody(""))}>
+        {d.source_available === false ? (
+          <p className="muted">The proof itself is not served from this deployment: Eddie shows statements only.</p>
+        ) : body == null ? (
+          <button type="button" className="link" onClick={() => api.declBody(d.id).then((r) => {
+            setBody(r.body ?? "");
+            setBodyNote(r.body_note ?? null);
+          }).catch(() => setBody(""))}>
             Show the Lean source
           </button>
         ) : (
           <pre className="lean lean-body">
-            <code>{body || "Source not available on this host."}</code>
+            <code>{body || bodyNote || "Source not available on this host."}</code>
           </pre>
         )}
       </Section>

@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 # Run the operator CLI against live Ember with the key taken from the Kubernetes Secret that
 # scripts/ember-key.sh stores. The key goes from the API server into this process's memory and
-# on to the CLI as an environment variable; it is never written to a file or put on a command
-# line. eddie/llm/transport.py removes it from the environment as soon as it starts, so nothing
-# the CLI spawns inherits it.
+# on to the CLI over an inherited pipe (fd 3, named by EDDIE_KEY_FD). It is never written to a
+# file, never put on a command line and never put in an environment variable: /proc/<pid>/environ
+# keeps a process's original environment for its whole life, readable by any process of the same
+# user, sandboxed children included. eddie/llm/transport.py reads the pipe once and closes it.
 #
 #   scripts/ember-live.sh llm ping --region R1.triage --effort minimal --max-output-tokens 16
 #
@@ -29,7 +30,8 @@ key="$("$KUBECTL" -n "$NS" get secret "$NAME" -o "jsonpath={.data.$FIELD}" | bas
   || { echo "error: could not read $NS/$NAME: run scripts/ember-key.sh first" >&2; exit 1; }
 [[ -n "$key" ]] || { echo "error: $NS/$NAME is empty: run scripts/ember-key.sh" >&2; exit 1; }
 
-# exec replaces this shell, so no copy of the key outlives the CLI
-export META_API_KEY="$key"
+# printf is a builtin, so the key is in no process's arguments; the pipe holds it until the CLI
+# reads it. exec replaces this shell, so no copy of the key outlives the CLI.
+exec 3< <(printf '%s' "$key")
 key=""
-EDDIE_BACKEND=ember EDDIE_ALLOW_LIVE_EMBER=true exec "$PYTHON" -m eddie.cli "$@"
+EDDIE_KEY_FD=3 EDDIE_BACKEND=ember EDDIE_ALLOW_LIVE_EMBER=true exec "$PYTHON" -m eddie.cli "$@"

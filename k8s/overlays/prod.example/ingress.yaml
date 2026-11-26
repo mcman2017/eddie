@@ -1,0 +1,9 @@
+# JSON patch for the base Ingress: the real host, TLS from cert-manager, and (while AUTH=on) Basic Auth.
+- {op: replace, path: /spec/rules/0/host, value: "eddie.example.com"}
+- op: add
+  path: /spec/tls
+  value: [{hosts: ["eddie.example.com"], secretName: eddie-tls}]
+- {op: add, path: /metadata/annotations/cert-manager.io~1cluster-issuer, value: "letsencrypt-prod"}
+- {op: add, path: /metadata/annotations/nginx.ingress.kubernetes.io~1auth-type, value: basic}
+- {op: add, path: /metadata/annotations/nginx.ingress.kubernetes.io~1auth-secret, value: eddie-basic-auth}
+- {op: add, path: /metadata/annotations/nginx.ingress.kubernetes.io~1auth-realm, value: "Eddie preview"}

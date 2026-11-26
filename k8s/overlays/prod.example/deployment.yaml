@@ -1,0 +1,4 @@
+# JSON patch for the base Deployment: the pull secret, and the switches that change after the unlock.
+- op: add
+  path: /spec/template/spec/imagePullSecrets
+  value: [{name: "registry-secret"}]

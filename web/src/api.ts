@@ -108,6 +108,80 @@ export interface Witness {
   python_source: string | null;
   qc: Record<string, unknown> | null;
   bytes: number | null;
+  /** schema 2: which R1 attempt drew it, and how it relates to the declaration */
+  attempt?: number | null;
+  origin?: string | null;
+  caption?: string | null;
+  relation?: "special_case_check" | "numerical_illustration" | "analogy" | null;
+  call_id?: string | null;
+  response_id?: string | null;
+}
+
+/** The receipt of one model call (a display copy; the ledger is the source of truth). */
+export interface Receipt {
+  call_id: string;
+  backend: string;
+  region: string;
+  effort: string;
+  response_id: string | null;
+  status: string | null;
+  input_tokens: number;
+  cached_tokens: number;
+  output_tokens: number;
+  reasoning_tokens: number;
+  cost_usd: number;
+  shadow_usd: number;
+  latency_ms: number | null;
+}
+
+export interface Attempt {
+  attempt: number;
+  origin: string;
+  effort: string | null;
+  outcome: string;
+  title: string | null;
+  caption: string | null;
+  relation: string | null;
+  critique: string[] | null;
+  witness_id: number | null;
+  source: string;
+  call_id: string | null;
+  response_id: string | null;
+}
+
+export interface Citation {
+  decl: string;
+  module: string;
+  path: string;
+  start_line: number;
+  end_line: number;
+}
+
+export interface ArbiterNotes {
+  verdict: "faithful" | "needs_fix" | "unfaithful";
+  hypotheses: { name: string; plain_english: string }[];
+  caveats: string[];
+  confidence: string;
+  reasoning_summary?: string[];
+}
+
+/** The demo film: local (the API streams the MP4) or youtube (an embed), or nothing at all. */
+export interface DemoVideoMeta {
+  available: boolean;
+  mode?: "local" | "youtube";
+  title?: string;
+  duration_s?: number | null;
+  duration_label?: string | null;
+  width?: number | null;
+  height?: number | null;
+  cut?: "draft" | "final";
+  poster?: boolean;
+  poster_src?: string | null;
+  src?: string;
+  embed_src?: string;
+  watch_url?: string;
+  youtube_id?: string;
+  external?: boolean;
 }
 
 export interface DeclDetail {
@@ -133,11 +207,40 @@ export interface DeclDetail {
   pillar: { id: number; title: string; slug: string };
   node_id: number | null;
   status: "verified" | "triaged" | "live" | "dead";
-  triage: { gloss: string; source: string } | null;
-  intuition: { intuition_md: string; verdict: string; source: string } | null;
+  triage: {
+    gloss: string;
+    source: string;
+    role?: string | null;
+    area?: string | null;
+    visualizability?: number | null;
+    visual_hint?: string | null;
+    call_id?: string | null;
+  } | null;
+  intuition: {
+    intuition_md: string;
+    verdict: string;
+    source: string;
+    arbiter_notes?: ArbiterNotes | null;
+    citation?: Citation[] | null;
+    call_id?: string | null;
+  } | null;
   witnesses: Witness[];
-  reviews: { region: string; verdict: string; reasons: string[]; source: string; witness_id: number | null }[];
+  reviews: Review[];
+  attempts?: Attempt[];
+  receipts?: Record<string, Receipt>;
+  /** false where the archive is not on disk (the public deployment): proof bodies are not served */
+  source_available?: boolean;
   planned: { tier: number; kind: string; scheduled_day: string | null; status: string } | null;
+}
+
+export interface Review {
+  region: string;
+  verdict: string;
+  reasons: string[];
+  source: string;
+  witness_id: number | null;
+  call_id?: string | null;
+  response_id?: string | null;
 }
 
 export interface ChapterNeighbour {
@@ -191,6 +294,10 @@ export interface ChapterDetail extends ChapterSummary {
   witnesses: (Witness & { decl_id: number; decl_full_name: string })[];
   reviews: DeclDetail["reviews"];
   planned: { milestones: number; first_day: string | null; consolidation_day: string | null } | null;
+  headline?: string | null;
+  receipt?: Receipt | null;
+  receipts?: Record<string, Receipt>;
+  pipeline?: { steps: Record<string, Record<string, number>>; errors: string[] } | null;
 }
 
 export interface Neighbors {
@@ -247,7 +354,8 @@ export const api = {
     getJson<MapPage>(`/api/map/node/${id}${include != null ? `?include=${include}` : ""}`),
   decl: (id: number) => getJson<DeclDetail>(`/api/decl/${id}`),
   neighbors: (id: number) => getJson<Neighbors>(`/api/decl/${id}/neighbors?limit=8`),
-  declBody: (id: number) => getJson<{ body?: string }>(`/api/decl/${id}?body=1`),
+  declBody: (id: number) => getJson<{ body?: string | null; body_note?: string }>(`/api/decl/${id}?body=1`),
+  demoVideoMeta: () => getJson<DemoVideoMeta>("/api/demo-video/meta"),
   chapters: () => getJson<{ chapters: ChapterSummary[]; stub_badge: string; flow: { forward_pct: number } }>("/api/chapters"),
   chapter: (slug: string) => getJson<ChapterDetail>(`/api/chapters/${encodeURIComponent(slug)}`),
   search: (q: string) =>

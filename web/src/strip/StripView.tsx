@@ -1,5 +1,6 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { ApiError } from "../api";
+import { FilmCard } from "../FilmCard";
 import { routeNumber, routeText, writeRoute } from "../route";
 import { RAMP_WAVE, RAMP_ZETA, actName } from "../theme";
 import { topPeaks } from "./field";
@@ -9,6 +10,7 @@ import { rampGradient } from "./ramp";
 import { SpectrumPanel } from "./SpectrumPanel";
 import { StripEngine, type Population, type Probe, type TourEvent } from "./StripEngine";
 import { CUES, SHOTS, type SceneState, type ShotId, type TourFacts } from "./tour";
+import { shotStarts, TourNarrator } from "./TourAudio";
 import "./strip.css";
 
 interface Props {
@@ -37,6 +39,25 @@ function captionOf(id: ShotId): number {
     if (c.shot === id) cue = i;
   });
   return cue;
+}
+
+const VOICE_KEY = "eddie.narration";
+const SHOT_STARTS = shotStarts(CUES, SHOTS);
+
+/** Narration never plays in the capture layout (unless #narrate=1) or with ?mute=1 / #mute=1. */
+function narrationBlocked(cinema: boolean): boolean {
+  const query = new URLSearchParams(window.location.search);
+  const hash = new URLSearchParams(window.location.hash.slice(1));
+  if (query.get("mute") === "1" || hash.get("mute") === "1") return true;
+  return cinema && hash.get("narrate") !== "1" && query.get("narrate") !== "1";
+}
+
+function storedVoice(): boolean {
+  try {
+    return window.localStorage.getItem(VOICE_KEY) !== "off";
+  } catch {
+    return true;
+  }
 }
 
 /** #shot=3 or #shot=morph */
@@ -82,7 +103,32 @@ export default function StripView({ active, chapter, onChapter, cinema, onTourin
   const [card, setCard] = useState(false);
   const [playing, setPlaying] = useState(false);
   const [hud, setHud] = useState<string | null>(null);
+  const [voice, setVoice] = useState(storedVoice);
+  const narratorRef = useRef<TourNarrator | null>(null);
+  const lastShot = useRef(-1);
+  const blocked = narrationBlocked(cinema);
+  const blockedRef = useRef(blocked);
+  blockedRef.current = blocked;
+  const voiceRef = useRef(voice);
+  voiceRef.current = voice;
+  const legendRef = useRef<HTMLDivElement>(null);
+  const [legendH, setLegendH] = useState(170);
   const wave = blend >= 0.5;
+
+  const narrator = () => {
+    if (!narratorRef.current) {
+      narratorRef.current = new TourNarrator();
+      narratorRef.current.setMuted(!voiceRef.current);
+      (window as unknown as { __eddieNarration?: unknown }).__eddieNarration = {
+        state: () => ({ ...narratorRef.current?.state, enabled: voiceRef.current, blocked: blockedRef.current }),
+      };
+    }
+    return narratorRef.current;
+  };
+  const hush = () => {
+    lastShot.current = -1;
+    narratorRef.current?.stop();
+  };
 
   const stopSound = () => {
     synthRef.current?.stop();
@@ -95,6 +141,16 @@ export default function StripView({ active, chapter, onChapter, cinema, onTourin
   onTour.current = (e) => {
     setBlend(e.scene.wave ? 1 : 0);
     setPopulation(e.scene.population);
+    // the voice follows the tour's own clock: each shot's clip starts when the tour enters that shot
+    if (e.phase === "cue" && e.playing && !blockedRef.current) {
+      const index = SHOTS.findIndex((x) => x.id === e.shot);
+      if (index >= 0 && index !== lastShot.current) {
+        lastShot.current = index;
+        void narrator().play(index, Math.max(0, e.t - SHOT_STARTS[index]));
+      }
+    }
+    if (e.phase === "cancel") hush();
+    if (e.phase === "end") lastShot.current = -1; // the last clip finishes on its own, inside its window
     if (e.phase === "cancel") {
       setTouring(false);
       setShot(null);
@@ -136,6 +192,7 @@ export default function StripView({ active, chapter, onChapter, cinema, onTourin
             onProbe: setProbe,
             onTour: (e) => onTour.current(e),
             onContext: (state) => setStatus(state === "lost" ? "lost" : "ready"),
+            onInteract: () => hush(), // a camera drag ends the narration, touring or not
           },
           { freeze: routeNumber("freeze") },
         );
@@ -168,8 +225,25 @@ export default function StripView({ active, chapter, onChapter, cinema, onTourin
       engineRef.current = null;
       synthRef.current?.dispose();
       synthRef.current = null;
+      narratorRef.current?.dispose();
+      narratorRef.current = null;
     };
-  }, [attempt]);
+  }, [attempt]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // a hidden tab stops the tour's clock (no frames); the voice waits with it
+  useEffect(() => {
+    const onVisibility = () => {
+      if (document.hidden) narratorRef.current?.pause();
+      else narratorRef.current?.resume();
+    };
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => document.removeEventListener("visibilitychange", onVisibility);
+  }, []);
+
+  // the capture layout (or ?mute=1) arriving mid-take silences everything at once
+  useEffect(() => {
+    if (blocked) hush();
+  }, [blocked]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const ready = status === "ready" && land != null;
 
@@ -189,6 +263,17 @@ export default function StripView({ active, chapter, onChapter, cinema, onTourin
   useEffect(() => {
     if (ready && labelsRef.current) engineRef.current?.attachLabels(labelsRef.current);
   }, [ready, land]);
+
+  // the film card sits just above the legend, whatever height the legend has in this mode
+  useEffect(() => {
+    const el = legendRef.current;
+    if (!el) return;
+    const fit = () => setLegendH(Math.round(el.getBoundingClientRect().height));
+    fit();
+    const observer = new ResizeObserver(fit);
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [ready, cinema]);
 
   useEffect(() => {
     if (ready) engineRef.current?.setActive(active);
@@ -224,6 +309,7 @@ export default function StripView({ active, chapter, onChapter, cinema, onTourin
   /** A change the user makes by hand ends the tour and drops the shot's caption. */
   const byHand = () => {
     engineRef.current?.stopTour();
+    hush();
     setShot(null);
     setCue(null);
     writeRoute({ shot: null, tour: null });
@@ -260,10 +346,18 @@ export default function StripView({ active, chapter, onChapter, cinema, onTourin
     setShot(id);
     setCue(captionOf(id));
     writeRoute({ shot: at + 1, cam: null, tour: null });
+    // a pill tells its own shot while the camera flies there; muted, it stays silent
+    hush();
+    if (!blockedRef.current && voiceRef.current) {
+      const n = narrator();
+      n.prime();
+      void n.play(at, 0);
+    }
   };
 
   const goOverview = () => {
     engineRef.current?.flyToPreset("overview");
+    hush();
     setShot(null);
     setCue(null);
     writeRoute({ shot: null, cam: null, tour: null });
@@ -272,9 +366,46 @@ export default function StripView({ active, chapter, onChapter, cinema, onTourin
   const toggleTour = () => {
     const engine = engineRef.current;
     if (!engine) return;
-    if (touring) engine.stopTour();
-    else engine.playTour();
+    if (touring) {
+      engine.stopTour();
+      return;
+    }
+    lastShot.current = -1;
+    // inside the click (or key press): the only moment a browser lets a page start sound
+    if (!blockedRef.current) narrator().prime();
+    engine.playTour();
   };
+
+  /** One switch for the voice: the clip keeps running when muted, so unmuting rejoins it in sync. */
+  const toggleVoice = () => {
+    if (blockedRef.current) return;
+    const next = !voiceRef.current;
+    voiceRef.current = next;
+    setVoice(next);
+    try {
+      window.localStorage.setItem(VOICE_KEY, next ? "on" : "off");
+    } catch {
+      /* private mode: the choice lasts for this page */
+    }
+    const n = narrator();
+    if (next) n.prime();
+    n.setMuted(!next);
+  };
+
+  // the film takes the stage: every other sound stops, and the 3D view pauses so the video runs smoothly
+  const filmOpened = useCallback(() => {
+    engineRef.current?.stopTour();
+    hush();
+    synthRef.current?.stop();
+    setPlaying(false);
+    setHud(null);
+    engineRef.current?.setActive(false);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  const activeRef = useRef(active);
+  activeRef.current = active;
+  const filmClosed = useCallback(() => {
+    engineRef.current?.setActive(activeRef.current);
+  }, []);
 
   const play = () => {
     const engine = engineRef.current;
@@ -284,6 +415,7 @@ export default function StripView({ active, chapter, onChapter, cinema, onTourin
       stopSound();
       return;
     }
+    hush(); // the chord and the voice never talk over each other
     const tones: Tone[] = wave
       ? topPeaks(engine.profile(), land.tMax, 12).map((p, index) => ({ t: p.t, weight: p.r, index }))
       : land.meta.zeta.zeros.slice(0, 12).map((z, index) => ({ t: z.t, weight: 1 / Math.hypot(0.5, z.t), index }));
@@ -306,11 +438,13 @@ export default function StripView({ active, chapter, onChapter, cinema, onTourin
     const onKey = (e: KeyboardEvent) => {
       const el = e.target as HTMLElement | null;
       if (e.metaKey || e.ctrlKey || e.altKey || (el && /^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName))) return;
+      if (document.querySelector("dialog[open]")) return; // the film's lightbox has the keyboard
       const pill = SHOTS[Number(e.key) - 1];
       if (pill) goShot(pill.id);
       else if (e.key === "0") goOverview();
       else if (e.key === "t" || e.key === "T") toggleTour();
       else if (e.key === "o" || e.key === "O") setOrbit((v) => !v);
+      else if ((e.key === "m" || e.key === "M") && !blocked) toggleVoice();
       else if (e.key === "Escape" && touring) engineRef.current?.stopTour();
       else return;
       e.preventDefault();
@@ -329,7 +463,8 @@ export default function StripView({ active, chapter, onChapter, cinema, onTourin
   };
 
   return (
-    <section className={`strip${touring ? " is-touring" : ""}${cinema ? " is-cinema" : ""}`} aria-label="3D critical strip and proof wave">
+    <section className={`strip${touring ? " is-touring" : ""}${cinema ? " is-cinema" : ""}`} aria-label="3D critical strip and proof wave"
+      style={{ ["--legend-h" as string]: `${legendH}px` }}>
       <div className="strip-host" ref={hostRef} />
       {ready && land && (
         <>
@@ -381,7 +516,7 @@ export default function StripView({ active, chapter, onChapter, cinema, onTourin
             {land.meta.stale && cue == null && <span> The landscape is older than the proof cone: run make landscape.</span>}
           </p>
 
-          <div className="strip-legend" data-testid="strip-legend">
+          <div className="strip-legend" data-testid="strip-legend" ref={legendRef}>
             <div className="legend-ramp" style={{ background: wave ? WAVE_KEY : ZETA_KEY }} />
             <div className="legend-ends">
               <span>{wave ? "quiet" : "ζ near 0"}</span>
@@ -411,9 +546,24 @@ export default function StripView({ active, chapter, onChapter, cinema, onTourin
           </div>
 
           <div className="strip-shots" role="group" aria-label="Shots and tour">
-            <button type="button" className="tour-play" data-testid="tour-play" aria-pressed={touring} onClick={toggleTour} title="Key T">
-              {touring ? "Stop tour" : "Play Visual Tour"}
-            </button>
+            {cinema ? (
+              <button type="button" className="tour-play" data-testid="tour-play" aria-pressed={touring} onClick={toggleTour} title="Key T">
+                {touring ? "Stop tour" : "Play Visual Tour"}
+              </button>
+            ) : (
+              <div className="tour-row">
+                <button type="button" className="tour-play" data-testid="tour-play" aria-pressed={touring} onClick={toggleTour} title="Key T">
+                  {touring ? "Stop tour" : "Play Visual Tour"}
+                </button>
+                <button type="button" className={`tour-sound${voice && !blocked ? "" : " is-muted"}`} data-testid="tour-sound"
+                  aria-pressed={voice && !blocked} disabled={blocked} onClick={toggleVoice}
+                  aria-label={blocked ? "Narration is off for this link" : voice ? "Narration on: mute it" : "Narration muted: turn it on"}
+                  title={blocked ? "Muted by the link (mute=1)" : "Narration (key M)"}>
+                  <SpeakerIcon on={voice && !blocked} />
+                  <span>{voice && !blocked ? "Voice" : "Muted"}</span>
+                </button>
+              </div>
+            )}
             <ol className="shot-list">
               {SHOTS.map((s, i) => (
                 <li key={s.id}>
@@ -502,6 +652,9 @@ export default function StripView({ active, chapter, onChapter, cinema, onTourin
 
           {card && <SpectrumPanel land={land} onFly={(sigma, t) => engineRef.current?.flyToPoint(sigma, t)} />}
 
+          {/* never in the capture layout: the film must not end up recorded inside itself */}
+          {!cinema && <FilmCard onOpen={filmOpened} onClose={filmClosed} />}
+
           {hover != null && chapters[hover] && (
             <div className="strip-hover" role="status">
               <strong>
@@ -551,5 +704,19 @@ export default function StripView({ active, chapter, onChapter, cinema, onTourin
         </div>
       )}
     </section>
+  );
+}
+
+/** A speaker, with sound waves when the voice is on and a cross when it is muted (a shape and a word, never a hue). */
+function SpeakerIcon({ on }: { on: boolean }) {
+  return (
+    <svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true">
+      <path d="M 2.5 7 H 5.5 L 9.5 3.5 V 14.5 L 5.5 11 H 2.5 Z" fill="currentColor" />
+      {on ? (
+        <path d="M 12 6.2 Q 13.6 9 12 11.8 M 14 4.2 Q 17 9 14 13.8" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+      ) : (
+        <path d="M 12 6.5 L 16.5 11 M 16.5 6.5 L 12 11" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+      )}
+    </svg>
   );
 }

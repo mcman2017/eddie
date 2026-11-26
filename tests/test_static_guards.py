@@ -49,7 +49,11 @@ def test_infrastructure_never_carries_keys_or_env_files():
     sources = [line.split("source:", 1)[1].strip() for line in compose.splitlines() if "source:" in line]
     assert sources == ["./data/index", "${EDDIE_PUBLIC_DIR:-${HOME}/.local/share/eddie/public}"], sources
     assert compose.count("read_only: true") >= 3  # both mounts + the root filesystem
-    for manifest in (ROOT / "k8s").glob("*.yaml"):
+    tracked = subprocess.run(["git", "-C", str(ROOT), "ls-files", "--cached", "--others", "--exclude-standard", "k8s"],
+                             capture_output=True, text=True).stdout.split()
+    manifests = [ROOT / p for p in tracked if p.endswith((".yaml", ".yml"))] or list((ROOT / "k8s").rglob("*.yaml"))
+    assert len(manifests) >= 8, manifests
+    for manifest in manifests:
         text = manifest.read_text()
         assert "META_API_KEY" not in text, manifest.name
         assert "secretKeyRef" not in text and "kind: Secret" not in text, manifest.name
@@ -78,7 +82,8 @@ def _hygiene_module():
     "path",
     ["src/Main.lean", "data/raw/parts/lean.tar.gz.part01", "ledger.sqlite", "x.sqlite-wal", ".env",
      "initial-prompt.md", "prompt-1.md", "prompt-2.md", ".hygiene-blocklist", "CLAUDE.local.md",
-     "exports/eddie_ember_telemetry.json", "data/index/x"],
+     "exports/eddie_ember_telemetry.json", "data/index/x", "data/media/eddie_demo.mp4", "web/public/film.mp4",
+     "web/public/clip.webm"],
 )
 def test_hygiene_check_flags_forbidden_paths(path):
     assert _hygiene_module().path_violations(path)
@@ -119,7 +124,27 @@ def test_hygiene_blocks_internal_hosts_by_hash_including_subdomains(monkeypatch)
 
 
 def test_k8s_uses_only_public_placeholders():
-    kustom = (ROOT / "k8s/kustomization.yaml").read_text()
+    kustom = (ROOT / "k8s/base/kustomization.yaml").read_text()
     assert "ghcr.io/mcman2017/eddie" in kustom
-    assert "eddie.example.local" in (ROOT / "k8s/ingress.yaml").read_text()
-    assert "imagePullSecrets" not in (ROOT / "k8s/deployment.yaml").read_text()
+    assert "eddie.example.local" in (ROOT / "k8s/base/ingress.yaml").read_text()
+    assert "imagePullSecrets" not in (ROOT / "k8s/base/deployment.yaml").read_text()
+    example = "".join(p.read_text() for p in (ROOT / "k8s/overlays/prod.example").iterdir() if p.is_file())
+    assert "eddie.example.com" in example and "registry.example.com/eddie" in example
+
+
+def test_the_real_overlay_is_git_ignored_and_the_pod_stays_read_only():
+    res = subprocess.run(["git", "-C", str(ROOT), "check-ignore", "-q", "k8s/overlays/prod/kustomization.yaml"])
+    assert res.returncode == 0, "k8s/overlays/prod/ must be git-ignored: it names the real host"
+    deployment = (ROOT / "k8s/base/deployment.yaml").read_text()
+    assert "readOnly: true" in deployment and "claimName: eddie-data" in deployment
+    assert "EDDIE_BACKEND\n              value: mock" in deployment
+
+
+def test_deploy_scripts_never_take_a_password_on_the_command_line():
+    for name in ("set_prod_auth.sh", "deploy_prod.sh", "unlock_public_submission.sh"):
+        text = (ROOT / "scripts" / name).read_text()
+        assert not re.search(r"^\s*set\s+(-[a-wyz]*x|-o\s+xtrace)", text, re.M), name  # tracing would print secrets
+        assert 'case "$-" in *x*)' in text, name  # and each refuses to run under someone else's set -x
+        assert not re.search(r"htpasswd[^\n]*\s-[a-zA-Z]*b", text), name  # -b would put the password in argv
+    auth = (ROOT / "scripts/set_prod_auth.sh").read_text()
+    assert "read -rs" in auth and "htpasswd -n -i -B -C 8" in auth and "/dev/tty" in auth

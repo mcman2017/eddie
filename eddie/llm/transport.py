@@ -35,6 +35,55 @@ EMBER_HOST = "api.meta.ai"
 EMBER_PATH = "/v1/responses"
 EMBER_URL = f"https://{EMBER_HOST}{EMBER_PATH}"
 RESERVATION_EXTENSION = "eddie_reservation"
+KEY_FD_ENV = "EDDIE_KEY_FD"
+MAX_KEY_BYTES = 4096
+
+# The key handed over on an inherited pipe (scripts/ember-live.sh), taken once at CLI start.
+_held: dict[str, str] = {}
+
+
+def take_key_fd(env: MutableMapping[str, str] | None = None) -> bool:
+    """Read the Ember key from the pipe named by EDDIE_KEY_FD, then close it.
+
+    `scripts/ember-live.sh` passes the key on fd 3 instead of in the environment, because
+    `/proc/<pid>/environ` keeps the original environment block even after `os.environ.pop`,
+    and any same-uid process (a sandboxed child included) can read it. The CLI calls this for
+    every command, so the pipe never lingers at `/proc/<pid>/fd/3`. Only a FIFO is accepted:
+    under pytest, for instance, fd 3 can be a capture file. Returns whether a key was taken.
+    """
+    env = os.environ if env is None else env
+    raw = env.pop(KEY_FD_ENV, None)
+    if raw is None:
+        return False
+    try:
+        fd = int(raw)
+    except ValueError as exc:
+        raise LiveEmberDisabledError(f"{KEY_FD_ENV} must be a file descriptor number") from exc
+    try:
+        st = os.fstat(fd)
+    except OSError as exc:
+        raise LiveEmberDisabledError(f"{KEY_FD_ENV}={fd} is not an open descriptor") from exc
+    if not stat.S_ISFIFO(st.st_mode):
+        os.close(fd)
+        raise LiveEmberDisabledError(f"{KEY_FD_ENV}={fd} is not a pipe; refusing to read a key from it")
+    chunks: list[bytes] = []
+    total = 0
+    try:
+        while chunk := os.read(fd, 1024):
+            total += len(chunk)
+            if total > MAX_KEY_BYTES:
+                raise LiveEmberDisabledError(f"{KEY_FD_ENV} carried more than {MAX_KEY_BYTES} bytes")
+            chunks.append(chunk)
+    finally:
+        os.close(fd)
+    key = b"".join(chunks).decode("utf-8", "replace").strip()
+    if key:
+        _held["key"] = key
+    return bool(key)
+
+
+def _take_held_key() -> str | None:
+    return _held.pop("key", None)
 
 
 class KeyProvider:
@@ -44,6 +93,10 @@ class KeyProvider:
         env = os.environ if env is None else env
         self._key_file = Path(key_file)
         self._env_key = env.pop("META_API_KEY", None)  # removed so no subprocess inherits it
+        fd_key = _take_held_key()
+        self.source = "fd" if fd_key else ("env" if self._env_key else "file")
+        if fd_key:
+            self._env_key = fd_key
 
     def check(self) -> None:
         if self._env_key:
@@ -65,7 +118,7 @@ class KeyProvider:
         return key
 
     def __repr__(self) -> str:  # never print the key
-        return f"KeyProvider(file={self._key_file}, env_key={'set' if self._env_key else 'unset'})"
+        return f"KeyProvider(file={self._key_file}, source={self.source}, key={'set' if self._env_key else 'unset'})"
 
 
 class GovernedTransport(httpx.AsyncBaseTransport):

@@ -4,7 +4,7 @@ import { AudioWitness } from "./AudioWitness";
 import { Prose } from "./Prose";
 import { StatusMark } from "./StatusMark";
 import { actName } from "./theme";
-import { WitnessViewer } from "./WitnessViewer";
+import { ReceiptLine, WitnessViewer } from "./WitnessViewer";
 
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 const TIERS: Tier[] = ["foundations", "machinery", "bottleneck", "main"];
@@ -90,7 +90,17 @@ export function ChapterGuide({ slug, chapters, onChapter, onSelectDecl }: Props)
             {d.badge}
           </p>
         ) : d.source ? (
-          <p className="source-badge">Written by the R4 consolidator ({d.source})</p>
+          <>
+            {d.headline && <p className="guide-headline">{d.headline}</p>}
+            <p className="source-badge" data-testid="source-badge">
+              {d.source === "ember"
+                ? "Written by the R4 consolidator"
+                : d.source === "mock"
+                  ? "Mock rehearsal text, not written by a model"
+                  : `Written by the R4 consolidator (${d.source})`}
+            </p>
+            <ReceiptLine receipt={d.receipt} />
+          </>
         ) : (
           <p className="stub-badge">No text yet: run make seed for the $0 structural stub</p>
         )}
@@ -137,7 +147,7 @@ export function ChapterGuide({ slug, chapters, onChapter, onSelectDecl }: Props)
 
       <section className="insp-section">
         <h2>See it and hear it</h2>
-        {visuals.length > 0 && <WitnessViewer witnesses={visuals} reviews={d.reviews} />}
+        {visuals.length > 0 && <WitnessViewer witnesses={visuals} reviews={d.reviews} receipts={d.receipts} />}
         {audio.map((a) => (
           <AudioWitness key={a.id} audio={a}
             spectrogram={spectrograms.find((s) => s.pair_id === a.id) ?? spectrograms.find((s) => s.id === a.pair_id) ?? null} />
@@ -145,9 +155,13 @@ export function ChapterGuide({ slug, chapters, onChapter, onSelectDecl }: Props)
         {d.witnesses.length === 0 && (
           <p className="muted">
             Nothing has been drawn or sounded for this chapter yet.{" "}
-            {d.planned
-              ? `The budget plan schedules ${d.planned.milestones} of its milestones from ${day(d.planned.first_day)} (R1 translation, R2 critique, R3 arbitration), then one R4 consolidation on ${day(d.planned.consolidation_day)}.`
-              : "It is outside the current Ember budget plan."}
+            {d.pipeline?.steps.witness
+              ? d.pipeline.steps.witness.failed
+                ? `The witness pipeline ran but nothing was verified${d.pipeline.errors[0] ? ` (${d.pipeline.errors[0]})` : ""}.`
+                : "The witness pipeline has not finished for this chapter yet."
+              : d.planned
+                ? `The budget plan schedules ${d.planned.milestones} of its milestones from ${day(d.planned.first_day)} (R1 translation, R2 critique, R3 arbitration), then one R4 consolidation on ${day(d.planned.consolidation_day)}.`
+                : "It is outside the current Ember budget plan."}
           </p>
         )}
       </section>
@@ -216,6 +230,10 @@ function Contents({ chapters, onChapter }: { chapters: ChapterSummary[]; onChapt
         <p className="guide-path">
           {chapters.length} chapters in the order the proof is built, from the foundations to Main. Select a chapter here or a
           beacon on the strip.
+        </p>
+        <p className="guide-note">
+          The Lean archive is its authors' work. Eddie shows the statements of its declarations and what it measured about them,
+          never the proofs themselves.
         </p>
         {stubs > 0 && (
           <p className="stub-badge">

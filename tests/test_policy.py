@@ -31,10 +31,11 @@ def test_region_effort_mismatch_is_refused(region, effort):
 
 def test_ceilings_and_minimum():
     with pytest.raises(ForbiddenParameterError):
-        check_request(_req(max_output_tokens=2_049))
+        check_request(_req(max_output_tokens=4_097))
     with pytest.raises(ForbiddenParameterError):
         check_request(_req(max_output_tokens=15))
     check_request(_req(max_output_tokens=16))
+    check_request(_req(max_output_tokens=4_096))  # a 15-25 declaration triage batch fits
 
 
 def test_arbiter_requires_concise_summary():

@@ -13,7 +13,9 @@ from __future__ import annotations
 import asyncio
 import os
 import random
+import sys
 import time
+from collections.abc import Callable
 from typing import Any
 
 import httpx
@@ -54,6 +56,7 @@ class EddieLLMGateway:
         dgx_transport: httpx.AsyncBaseTransport | None = None,
         mock_faults: list[str] | None = None,
         mock_latency_s: float = 0.0,
+        mock_responder: Callable[[dict[str, Any]], str] | None = None,
         sleep=asyncio.sleep,
     ) -> None:
         self.settings = settings or load_settings()
@@ -70,14 +73,16 @@ class EddieLLMGateway:
             self.governor.assert_live_allowed(real_network=real_network)
             keys = KeyProvider(self.settings.key_file)  # pops META_API_KEY out of os.environ
             keys.check()
+            self.key_source: str | None = keys.source  # fd | env | file; the key itself never leaves transport.py
             self.adapter: Any = EmberAdapter(self.governor, keys, inner=ember_transport)
         else:
             os.environ.pop("META_API_KEY", None)  # never leave a key where subprocesses inherit it
+            self.key_source = None
             self.governor = SpendGovernor(self.settings, billable=False)
             if self.backend == "dgx":
                 self.adapter = DgxAdapter(self.settings, transport=dgx_transport)
             else:
-                self.adapter = MockAdapter(faults=mock_faults, latency_s=mock_latency_s)
+                self.adapter = MockAdapter(faults=mock_faults, latency_s=mock_latency_s, responder=mock_responder)
 
     async def aclose(self) -> None:
         await self.adapter.aclose()
@@ -111,7 +116,14 @@ class EddieLLMGateway:
 
     # --- the call ---------------------------------------------------------------------------
 
-    async def respond(self, req: EddieRequest | dict[str, Any]) -> EddieResponse:
+    async def respond(
+        self,
+        req: EddieRequest | dict[str, Any],
+        *,
+        journal: Callable[[str, dict[str, Any] | None], None] | None = None,
+    ) -> EddieResponse:
+        """One governed call. `journal(call_id, payload)` runs on a 2xx BEFORE settlement, so a
+        caller that persists the payload there can never lose output it has paid for."""
         req, body, data, digest, estimate = self.preflight(req)
         async with self._sem:
             for attempt in range(1, MAX_ATTEMPTS + 1):
@@ -132,6 +144,11 @@ class EddieLLMGateway:
                 latency_ms = int((time.monotonic() - started) * 1000)
 
                 if 200 <= result.status < 300:
+                    if journal is not None:
+                        try:
+                            journal(res.call_id, result.payload)
+                        except Exception as exc:  # the money is spent: settle whatever happens to the journal
+                            print(f"warning: could not journal response {res.call_id}: {exc}", file=sys.stderr)
                     settlement = await asyncio.to_thread(
                         self.governor.settle_response,
                         res,
@@ -199,6 +216,20 @@ class EddieLLMGateway:
                 kind="ambiguous",
             )
             raise
+        except asyncio.CancelledError:
+            # Cancelled after dispatch. Settle synchronously (awaiting is not possible here), so the
+            # row never sits `dispatched` holding run, daily and concurrency headroom until the sweep.
+            self._settle_cancelled(res)
+            raise
+
+    def _settle_cancelled(self, res: Reservation) -> None:
+        row = self.governor.ledger.get_call(res.call_id)
+        if row is None or row["state"] not in ("reserved", "dispatched"):
+            return
+        if row["sent_at"] is None:  # the transport never claimed it: nothing left the process
+            self.governor.settle_failure(res, http_status=None, error="cancelled before sending", kind="never_sent")
+        else:
+            self.governor.settle_failure(res, http_status=None, error="cancelled after sending", kind="ambiguous")
 
     @staticmethod
     def _backoff(attempt: int, retry_after: float | None) -> float:

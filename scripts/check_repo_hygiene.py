@@ -42,6 +42,12 @@ FORBIDDEN_GLOBS = (
     ".hygiene-blocklist",
     "CLAUDE.local.md",
     "eddie_ember_telemetry.json",
+    # video never belongs in git, whatever its size (the demo film lives in git-ignored data/media/)
+    "*.mp4",
+    "*.m4v",
+    "*.mov",
+    "*.mkv",
+    "*.webm",
 )
 FORBIDDEN_DIR_PREFIXES = ("data/", "exports/", ".lake/", ".venv/", "node_modules/")
 ALLOWED_EXCEPTIONS = {".env.example", "data/README.md"}

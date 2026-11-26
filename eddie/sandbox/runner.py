@@ -9,6 +9,12 @@ Each job:
 * has stdout and stderr captured incrementally with a cap;
 * is then post-processed (spectrograms + QC) under the same guards, and its allowed
   outputs are copied into the content-addressed artifact store.
+
+`isolation="docker"` runs the same bootstrap inside a container (`make sandbox-image`) with no
+network, a read-only root, no capabilities, no new privileges and a pid limit. Only the job
+directory and this package's sandbox code (read-only) are mounted: no home directory, no
+kubeconfig, no ledger, and a separate pid namespace. That is the boundary for MODEL-WRITTEN
+code; the audit hook alone guards against bugs, not against native code.
 """
 
 from __future__ import annotations
@@ -18,6 +24,7 @@ import json
 import os
 import shutil
 import signal
+import subprocess
 import sys
 import tempfile
 import time
@@ -32,6 +39,14 @@ from eddie.sandbox.style import RC_FILE
 BOOT = Path(__file__).with_name("boot.py")
 POSTPROCESS = Path(__file__).with_name("postprocess.py")
 PACKAGE_DIR = Path(__file__).resolve().parent.parent
+SANDBOX_SRC = Path(__file__).resolve().parent
+ISOLATIONS = ("process", "docker")
+
+# Inside the sandbox image (Dockerfile target `sandbox`).
+C_JOB = "/job"
+C_SANDBOX = "/app/eddie/sandbox"
+C_MPLCACHE = "/opt/mplcache"
+C_READ_ROOTS = ["/usr/local", "/opt/venv", "/app/eddie", C_MPLCACHE]
 
 
 @dataclass(frozen=True)
@@ -72,16 +87,26 @@ class SandboxRunner:
         tmp_root: Path | None = None,
         mpl_cache: Path | None = None,
         python: str = sys.executable,
+        isolation: str = "process",
+        image: str = "eddie-sandbox:local",
+        docker: str = "docker",
     ) -> None:
+        if isolation not in ISOLATIONS:
+            raise ValueError(f"isolation must be one of {ISOLATIONS}")
         self.artifact_dir = Path(artifact_dir or paths.default_artifact_dir())
         self.limits = limits
         self.tmp_root = Path(tmp_root or tempfile.gettempdir())
         self.mpl_cache = Path(mpl_cache or paths.data_dir() / "sandbox" / "mplcache")
         self.python = python
+        self.isolation = isolation
+        self.image = image
+        self.docker = docker
+        self._image_checked = False
         self.mpl_cache.mkdir(parents=True, exist_ok=True)
         self.tmp_root.mkdir(parents=True, exist_ok=True)
         sweep_stale(self.tmp_root)
-        self._warm_font_cache()
+        if isolation == "process":
+            self._warm_font_cache()  # the image carries its own, built at image build time
 
     def _warm_font_cache(self) -> None:
         """Build matplotlib's font cache once, outside the sandbox.
@@ -133,11 +158,56 @@ class SandboxRunner:
             }
         )
 
-    async def _exec(self, job: Path, argv: list[str], wall_s: float) -> tuple[int | None, bytes, bytes, bool, bool]:
+    # --- the container backend -----------------------------------------------------------------
+
+    def _container_limits(self) -> str:
+        return json.dumps({
+            "cpu_s": self.limits.cpu_s, "mem_mb": self.limits.mem_mb, "fsize_mb": self.limits.fsize_mb,
+            "nofile": self.limits.nofile, "home_deny": "/home", "read_roots": C_READ_ROOTS, "extra_write_roots": [],
+        })
+
+    def docker_argv(self, job: Path, name: str, *, post: bool = False) -> list[str]:
+        """The full `docker run` command for one job (pure, so a test can audit every flag)."""
+        env = {
+            "PATH": "/opt/venv/bin:/usr/local/bin:/usr/bin:/bin", "HOME": C_JOB, "TMPDIR": f"{C_JOB}/tmp",
+            "MPLCONFIGDIR": f"{C_JOB}/.mpl", "EDDIE_MPL_SEED": C_MPLCACHE, "MPLBACKEND": "Agg",
+            "MATPLOTLIBRC": f"{C_SANDBOX}/eddie.matplotlibrc",
+            "PYTHONHASHSEED": "0", "OMP_NUM_THREADS": "1", "OPENBLAS_NUM_THREADS": "1", "MKL_NUM_THREADS": "1",
+            "NUMEXPR_NUM_THREADS": "1", "LANG": "C.UTF-8",
+        }
+        argv = [
+            self.docker, "run", "--rm", "--name", name, "--network", "none", "--read-only",
+            "--tmpfs", "/tmp:rw,nosuid,nodev,noexec,size=64m", "--cap-drop", "ALL",
+            "--security-opt", "no-new-privileges", "--pids-limit", "64", "--ipc", "none",
+            "--memory", f"{self.limits.mem_mb}m", "--memory-swap", f"{self.limits.mem_mb}m", "--cpus", "2",
+            "--user", f"{os.getuid()}:{os.getgid()}", "--workdir", C_JOB,
+            "--mount", f"type=bind,source={job},target={C_JOB}",
+            "--mount", f"type=bind,source={SANDBOX_SRC},target={C_SANDBOX},readonly",
+        ]
+        for key, value in env.items():
+            argv += ["--env", f"{key}={value}"]
+        argv += [self.image, "python", "-I", "-B", f"{C_SANDBOX}/boot.py", C_JOB, self._container_limits()]
+        if post:
+            argv += ["--post", f"{C_SANDBOX}/postprocess.py"]
+        return argv
+
+    def check_image(self) -> None:
+        if self._image_checked:
+            return
+        if shutil.which(self.docker) is None:
+            raise RuntimeError("the container sandbox needs docker on PATH")
+        res = subprocess.run([self.docker, "image", "inspect", self.image], capture_output=True, check=False)
+        if res.returncode != 0:
+            raise RuntimeError(f"no sandbox image {self.image!r}: run `make sandbox-image`")
+        self._image_checked = True
+
+    async def _exec(self, job: Path, argv: list[str], wall_s: float, *, container: str | None = None
+                    ) -> tuple[int | None, bytes, bytes, bool, bool]:
         proc = await asyncio.create_subprocess_exec(
             *argv,
             cwd=job,
-            env=self._env(job),
+            env=self._env(job) if container is None else {"PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+                                                          "HOME": str(paths.home()), "LANG": "C.UTF-8"},
             stdin=asyncio.subprocess.DEVNULL,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
@@ -161,6 +231,10 @@ class SandboxRunner:
             await asyncio.wait_for(asyncio.gather(proc.wait(), *tasks), wall_s)
         except TimeoutError:
             timed_out = True
+            if container is not None:  # killing the docker client would leave the container running
+                killer = await asyncio.create_subprocess_exec(
+                    self.docker, "kill", container, stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL)
+                await killer.wait()
             try:
                 os.killpg(proc.pid, signal.SIGKILL)
             except ProcessLookupError:
@@ -179,8 +253,14 @@ class SandboxRunner:
             (job / "tmp").mkdir()
             (job / "main.py").write_text(script, encoding="utf-8")
             timeout = timeout_s or self.limits.wall_s
-            argv = [self.python, "-I", "-B", str(BOOT), str(job), self._limits_json(job)]
-            rc, out, err, timed_out, truncated = await self._exec(job, argv, timeout)
+            container = None
+            if self.isolation == "docker":
+                await asyncio.to_thread(self.check_image)
+                container = f"eddie-sbx-{job_id}"
+                argv = self.docker_argv(job, container)
+            else:
+                argv = [self.python, "-I", "-B", str(BOOT), str(job), self._limits_json(job)]
+            rc, out, err, timed_out, truncated = await self._exec(job, argv, timeout, container=container)
             violations = _read_violations(job)
             if timed_out:
                 status = "timeout"
@@ -193,8 +273,11 @@ class SandboxRunner:
             qc: dict = {}
             if postprocess and not timed_out:
                 (job / ".sandbox_violations").unlink(missing_ok=True)
-                post_argv = argv + ["--post", str(POSTPROCESS)]
-                await self._exec(job, post_argv, max(timeout, 60.0))
+                if container is not None:
+                    post_name = f"{container}-post"
+                    await self._exec(job, self.docker_argv(job, post_name, post=True), max(timeout, 60.0), container=post_name)
+                else:
+                    await self._exec(job, argv + ["--post", str(POSTPROCESS)], max(timeout, 60.0))
                 qc_file = job / "qc.json"
                 if qc_file.exists():
                     qc = json.loads(qc_file.read_text())

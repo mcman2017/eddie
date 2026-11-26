@@ -42,7 +42,7 @@ def register(router: APIRouter, data: ExplorerData) -> None:
     def texts(con: sqlite3.Connection) -> dict[str, dict[str, Any]]:
         if not data.has_artifacts():
             return {}
-        return {r["pillar_slug"]: dict(r) for r in con.execute("SELECT pillar_slug, title, synthesis_md, source FROM art.chapters")}
+        return {r["pillar_slug"]: dict(r) for r in con.execute("SELECT * FROM art.chapters")}
 
     def badge(text: dict[str, Any] | None) -> str | None:
         return ch.STUB_BADGE if text and text["source"] == "seed" else None
@@ -78,23 +78,45 @@ def register(router: APIRouter, data: ExplorerData) -> None:
             out["source"] = text["source"] if text else None
             out["badge"] = badge(text)
             out["synthesis_md"] = text["synthesis_md"] if text else None
+            out["headline"] = text.get("headline") if text else None
+            out["receipt"] = None
+            out["pipeline"] = None
             row = con.execute("SELECT id FROM tree_nodes WHERE kind = 'pillar' AND pillar_id = ?", (f["pillar_id"],)).fetchone()
             out["node_id"] = row[0] if row else None
             statuses = data.status_by_decl(con)
             for key in ("bottlenecks", "final_theorems"):
                 out[key] = [{**b, "status": statuses.get(b["id"], "live")} for b in f[key]]
-            out["witnesses"], out["reviews"], out["planned"] = [], [], None
+            out["witnesses"], out["reviews"], out["planned"], out["receipts"] = [], [], None, {}
             if data.has_artifacts():
                 out["witnesses"] = [witness_json(w) for w in con.execute(
-                    "SELECT w.id, w.kind, w.title, w.artifact_sha256, w.ext, w.bytes, w.status, w.defects, w.qc, w.critic_verdict, "
-                    "w.supersedes_id, w.pair_id, w.source, w.python_source, w.decl_full_name, d.id AS decl_id "
-                    "FROM art.witnesses w JOIN idx.decls d ON d.full_name = w.decl_full_name "
+                    "SELECT w.*, d.id AS decl_id FROM art.witnesses w JOIN idx.decls d ON d.full_name = w.decl_full_name "
                     "JOIN decl_metrics m ON m.decl_id = d.id WHERE m.pillar_id = ? ORDER BY w.id", (f["pillar_id"],))]
                 ids = [w["id"] for w in out["witnesses"]]
                 if ids:
                     marks = ", ".join("?" for _ in ids)
-                    out["reviews"] = [{**dict(v), "reasons": json.loads(v["reasons"] or "[]")} for v in con.execute(
-                        f"SELECT region, verdict, reasons, source, witness_id FROM art.reviews WHERE witness_id IN ({marks}) ORDER BY id", ids)]
+                    from eddie.api.explorer import review_json
+
+                    out["reviews"] = [review_json(v) for v in con.execute(
+                        f"SELECT * FROM art.reviews WHERE witness_id IN ({marks}) ORDER BY id", ids)]
+                from eddie.api.explorer import has_table, receipts
+
+                calls = [text.get("call_id") if text else None] + [w.get("call_id") for w in out["witnesses"]]
+                calls += [v.get("call_id") for v in out["reviews"]]
+                found = receipts(con, calls)
+                out["receipts"] = found
+                if text and text.get("call_id"):
+                    out["receipt"] = found.get(text["call_id"])
+                if has_table(con, "art", "pipeline_steps"):
+                    steps = con.execute(
+                        "SELECT kind, status, error FROM art.pipeline_steps WHERE pillar_slug = ? AND kind <> 'call'", (slug,)
+                    ).fetchall()
+                    if steps:
+                        counts: dict[str, dict[str, int]] = {}
+                        for st in steps:
+                            counts.setdefault(st["kind"], {}).setdefault(st["status"], 0)
+                            counts[st["kind"]][st["status"]] += 1
+                        out["pipeline"] = {"steps": counts,
+                                           "errors": [st["error"] for st in steps if st["status"] == "failed" and st["error"]][:5]}
                 plan = {r[0]: (r[1], r[2]) for r in con.execute(
                     "SELECT tier, COUNT(*), MIN(scheduled_day) FROM art.work_items WHERE pillar_slug = ? GROUP BY tier", (slug,))}
                 if plan:

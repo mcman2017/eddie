@@ -1,5 +1,8 @@
 # syntax=docker/dockerfile:1.7
-# Eddie web/API image: read-only, keyless, mock backend. Ember calls never run in a container.
+# Eddie images. Ember calls never run in a container: there is no key in any stage.
+#   default target (runtime): the read-only, keyless web/API image that k8s serves
+#   --target sandbox: the box that model-written witness scripts run in (make sandbox-image),
+#                     started with --network none and only the job directory mounted
 
 # ---- web UI -----------------------------------------------------------------------------
 FROM node:22-bookworm-slim AS web
@@ -9,8 +12,8 @@ RUN npm ci --no-audit --no-fund
 COPY web/ ./
 RUN npm run build
 
-# ---- python runtime ----------------------------------------------------------------------
-FROM python:3.12-slim-bookworm AS runtime
+# ---- python dependencies and the eddie package --------------------------------------------
+FROM python:3.12-slim-bookworm AS pybase
 COPY --from=ghcr.io/astral-sh/uv:0.10.0 /uv /usr/local/bin/uv
 ENV UV_COMPILE_BYTECODE=1 \
     UV_LINK_MODE=copy \
@@ -22,11 +25,21 @@ COPY pyproject.toml uv.lock README.md ./
 RUN uv sync --frozen --no-dev --no-install-project
 COPY eddie/ ./eddie/
 RUN uv sync --frozen --no-dev
-COPY --from=web /web/dist ./web/dist
-
 ENV PATH=/opt/venv/bin:$PATH \
-    HOME=/tmp \
-    EDDIE_BACKEND=mock \
+    HOME=/tmp
+
+# ---- the witness sandbox (never deployed) ---------------------------------------------------
+FROM pybase AS sandbox
+ENV MPLCONFIGDIR=/opt/mplcache \
+    MPLBACKEND=Agg
+# build matplotlib's font cache now: inside the sandbox, fc-list (a subprocess) is refused
+RUN mkdir -p /opt/mplcache && python -c "import matplotlib.pyplot" && chmod -R a+rX /opt/mplcache
+USER 65534:65534
+
+# ---- the read-only web/API image --------------------------------------------------------------
+FROM pybase AS runtime
+COPY --from=web /web/dist ./web/dist
+ENV EDDIE_BACKEND=mock \
     EDDIE_DATA_DIR=/data \
     EDDIE_INDEX_PATH=/data/index/eddie_index.sqlite \
     EDDIE_PUBLIC_DIR=/public \

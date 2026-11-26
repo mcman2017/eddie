@@ -1,0 +1,102 @@
+{
+  "version": 1,
+  "engine": "kokoro-onnx (Kokoro-82M, Apache-2.0)",
+  "voice": "am_michael",
+  "models": {
+    "kokoro-v1.0.onnx": "7d5df8ecf7d4b1878015a32686053fd0eebe2bc377234608764cc0ef3636a6c5",
+    "voices-v1.0.bin": "bca610b8308e8d99f32e6fe4197e7ec01679264efed0cac9140fe9c29f1fbf7d"
+  },
+  "margin_s": 0.3,
+  "shots": [
+    {
+      "id": "zeros",
+      "file": "/audio/tour/shot_1.mp3",
+      "start": 0.0,
+      "end": 8.8,
+      "duration_s": 8.352,
+      "speed": 1.0,
+      "lines": [
+        {
+          "at": 0.1,
+          "duration_s": 8.18,
+          "text": "Riemann's 1859 bet: every zero of zeta, each emerald well you see, sits exactly on this gold line."
+        }
+      ],
+      "bytes": 100512,
+      "sha256": "2bb619afc2abdc297a0c2ca031925adaa68705ceb5617b347b980bd67df00711"
+    },
+    {
+      "id": "funnel",
+      "file": "/audio/tour/shot_2.mp3",
+      "start": 8.8,
+      "end": 14.2,
+      "duration_s": 4.104,
+      "speed": 1.0,
+      "lines": [
+        {
+          "at": 0.1,
+          "duration_s": 3.94,
+          "text": "The proof: twenty chapters, each arc feeding the next, up to Main."
+        }
+      ],
+      "bytes": 49536,
+      "sha256": "0767eb2889a46b3598bd6ad4699068165d1442e97d44dfde5ccb1787ed71bf2a"
+    },
+    {
+      "id": "morph",
+      "file": "/audio/tour/shot_3.mp3",
+      "start": 14.2,
+      "end": 21.6,
+      "duration_s": 6.936,
+      "speed": 1.05,
+      "lines": [
+        {
+          "at": 0.1,
+          "duration_s": 6.78,
+          "text": "Now the proof's own shape: a million declarations as a single wave. It pictures the code, not zeta."
+        }
+      ],
+      "bytes": 83520,
+      "sha256": "a5732a7128823384e408c9acb167e720f4c29e38d57b82f548a30893c1a1a353"
+    },
+    {
+      "id": "compare",
+      "file": "/audio/tour/shot_4.mp3",
+      "start": 21.6,
+      "end": 31.4,
+      "duration_s": 8.304,
+      "speed": 1.0,
+      "lines": [
+        {
+          "at": 0.1,
+          "duration_s": 4.22,
+          "text": "Colour is the live proof. Grey is the dead code it never uses."
+        },
+        {
+          "at": 5.2,
+          "duration_s": 3.04,
+          "text": "Together, the outlines mark where the two differ most."
+        }
+      ],
+      "bytes": 99936,
+      "sha256": "40462f35802c6815c491055f73a69e9d92b4b01600e2df9ed1cbabb321fda253"
+    },
+    {
+      "id": "summit",
+      "file": "/audio/tour/shot_5.mp3",
+      "start": 31.4,
+      "end": 40.0,
+      "duration_s": 7.44,
+      "speed": 1.0,
+      "lines": [
+        {
+          "at": 0.1,
+          "duration_s": 7.28,
+          "text": "The summit, Main.lean. One theorem here, allChi, stands between Main and eighty-five percent of the proof."
+        }
+      ],
+      "bytes": 89568,
+      "sha256": "6ff5929e64c07f9371c3bf1eb6b5d0513b93afbf5519b1f47e7839f58e7826c6"
+    }
+  ]
+}

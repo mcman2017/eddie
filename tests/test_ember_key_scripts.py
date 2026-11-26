@@ -2,7 +2,8 @@
 
 What must hold: the key reaches the Secret exactly as typed (underscores and dashes included),
 it is never an argument of any process and never printed, a malformed key stores nothing, and
-the live wrapper hands the key to the CLI through the environment only. No cluster is touched:
+the live wrapper hands the key to the CLI on an inherited pipe, never in an environment
+variable (which /proc/<pid>/environ would keep for the process's life). No cluster is touched:
 `kubectl` is a small script in the temp dir, and the "CLI" is a stub that reports what it saw.
 """
 
@@ -160,7 +161,7 @@ def test_status_and_remove(world):
 
 
 @pytest.mark.slow
-def test_live_wrapper_hands_the_key_to_the_cli_in_the_environment_only(world, tmp_path):
+def test_live_wrapper_hands_the_key_to_the_cli_on_a_pipe_never_in_the_environment(world, tmp_path):
     state, env = world
     on_tty(SET, env, [("Store the Ember API key", "y"), ("Create it", "y"), ("Ember API key", KEY)])
     # a copy of the repo layout whose "python" reports what the wrapper gave it
@@ -172,14 +173,19 @@ def test_live_wrapper_hands_the_key_to_the_cli_in_the_environment_only(world, tm
     stub.write_text(
         "#!/usr/bin/env bash\n"
         'printf "argv=%s\\n" "$*"\n'
-        'printf "key_ok=%s backend=%s live=%s\\n" "$([[ "$META_API_KEY" == "$EXPECT" ]] && echo yes || echo no)" "$EDDIE_BACKEND" "$EDDIE_ALLOW_LIVE_EMBER"\n'
+        'piped="$(cat <&"$EDDIE_KEY_FD")"\n'
+        'printf "fd=%s piped_ok=%s env_key=%s backend=%s live=%s\\n" "$EDDIE_KEY_FD" '
+        '"$([[ "$piped" == "$EXPECT" ]] && echo yes || echo no)" "${META_API_KEY:-unset}" "$EDDIE_BACKEND" "$EDDIE_ALLOW_LIVE_EMBER"\n'
+        'env | grep -c "$EXPECT" || true\n'
     )
     stub.chmod(stub.stat().st_mode | stat.S_IXUSR)
     code, seen = on_tty([str(repo / "scripts" / "ember-live.sh"), "llm", "ping", "--region", "R1.triage"], {**env, "EXPECT": KEY}, [])
     assert code == 0, seen
     assert "argv=-m eddie.cli llm ping --region R1.triage" in seen  # the key is not among the arguments
-    assert "key_ok=yes backend=ember live=true" in seen
-    assert KEY not in seen and KEY not in (state / "argv.log").read_text()
+    assert "fd=3 piped_ok=yes env_key=unset backend=ember live=true" in seen
+    # the only environment variable holding the key is the test's own EXPECT: the wrapper adds none
+    assert seen.strip().splitlines()[-1].strip() == "1"
+    assert KEY not in seen and (state / "argv.log").read_text().count(KEY) == 0
     # without a stored key the wrapper stops before starting the CLI
     (state / "secret.b64").unlink()
     code, seen = on_tty([str(repo / "scripts" / "ember-live.sh"), "llm", "ping"], {**env, "EXPECT": KEY}, [])
