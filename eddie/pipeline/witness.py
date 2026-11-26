@@ -22,7 +22,7 @@ from typing import TYPE_CHECKING, Any
 
 from eddie.pipeline import prompts
 from eddie.pipeline.calls import image_part, text_part
-from eddie.pipeline.context import CARRY_CODE, CARRY_CRITIQUE, Card, clip, render
+from eddie.pipeline.context import CARRY_CODE, CARRY_CRITIQUE, CARRY_HISTORY, Card, clip, render
 from eddie.pipeline.scriptcheck import check_script
 
 if TYPE_CHECKING:
@@ -53,7 +53,9 @@ def schedule(calibration_draft: bool) -> list[tuple[str, str, int]]:
     return plan + [("r1", "medium", WORKER_MAX), ("r1", "medium", WORKER_MAX), ("r1", "high", WORKER_MAX_HIGH)]
 
 
-def worker_prompt(job: WitnessJob, previous_code: str | None, critique: list[str] | None) -> str:
+def worker_prompt(job: WitnessJob, previous_code: str | None, critique: list[str] | None,
+                  history: list[str] | None = None) -> str:
+    """The R1.worker prompt. A repair-pass attempt also gets the hint and every earlier defect (`history`)."""
     parts = ["Declaration to illustrate:", render(job.target, label="target")]
     if job.gloss:
         parts += ["", f"First reader's plain-English gloss: {job.gloss}"]
@@ -61,8 +63,13 @@ def worker_prompt(job: WitnessJob, previous_code: str | None, critique: list[str
         parts += ["", "It builds on (for context only):"]
         parts += [render(n, with_context=False) for n in job.neighbours]
     if previous_code is not None:
+        if history:
+            parts += ["", prompts.REPAIR_PASS]
+            wrong, cap, heading = history, CARRY_HISTORY, "What was wrong, in every earlier attempt (fix all of it):"
+        else:
+            wrong, cap, heading = critique or ["(no detail)"], CARRY_CRITIQUE, "What was wrong:"
         parts += ["", prompts.REPAIR, "Previous script:", "```python", clip(previous_code, CARRY_CODE), "```",
-                  "What was wrong:", clip("\n".join(f"- {c}" for c in (critique or ["(no detail)"])), CARRY_CRITIQUE)]
+                  heading, clip("\n".join(f"- {c}" for c in wrong), cap)]
     return "\n".join(parts)
 
 
@@ -136,7 +143,23 @@ async def re_review(ctx: RunContext, job: WitnessJob, att: sqlite3.Row) -> Any |
     return v
 
 
-async def run_witness(ctx: RunContext, job: WitnessJob) -> dict[str, Any]:
+def defects_of(attempts: list[Any]) -> list[str]:
+    """Every defect R2 or the checks named in these attempts, in order, each once (no-verdict notes left out)."""
+    seen: dict[str, None] = {}
+    for a in attempts:
+        if a["outcome"] in ("verified", "critic_unusable") or not a["critique"]:
+            continue
+        for c in json.loads(a["critique"]):
+            seen.setdefault(str(c), None)
+    return list(seen)
+
+
+async def run_witness(ctx: RunContext, job: WitnessJob, *, extra: int = 0) -> dict[str, Any]:
+    """Draw, check and review a witness until R2 verifies one or the schedule runs out.
+
+    `extra` adds that many high-effort repair attempts after the usual schedule (the repair phase); they
+    see every defect of every earlier attempt.
+    """
     decl = job.target.full_name
     prior = await ctx.attempts(decl)
     if any(a["outcome"] == "verified" for a in prior):
@@ -157,15 +180,19 @@ async def run_witness(ctx: RunContext, job: WitnessJob) -> dict[str, Any]:
         if verdict.verdict == "verified":
             return {"verified": last["witness_id"], "attempts": len(prior)}
         critique = [*verdict.defects, *(f"fix: {f}" for f in verdict.fixes)] or None  # repaired as usual
-    plan = schedule(job.calibration_draft)
+    plan = schedule(job.calibration_draft) + [("repair", "high", WORKER_MAX_HIGH)] * extra
+    history = defects_of(await ctx.attempts(decl)) if extra else []
     for n in range(len(prior), len(plan)):
         origin, effort, max_out = plan[n]
         draft = origin == "calibration_draft"
+        if origin == "repair" and critique:
+            history = list(dict.fromkeys([*history, *critique]))
         await ctx.activity("R1.worker", decl, f"writing witness attempt {n + 1} for {decl}")
+        prompt = worker_prompt(job, None if draft else previous_code, None if draft else critique,
+                               history=history if origin == "repair" else None)
         req_kwargs = dict(region="R1.worker", effort=effort, max_output=max_out,
                           instructions=prompts.WORKER_DRAFT if draft else prompts.WORKER,
-                          parts=[text_part(worker_prompt(job, None if draft else previous_code, None if draft else critique))],
-                          schema="worker")
+                          parts=[text_part(prompt)], schema="worker")
         res = await ctx.call_slot(f"{job.step_key}:w{n}", **req_kwargs)
         if not res.ok:
             critique = [f"your reply could not be used ({res.status}: {res.error}); return the JSON object with the whole script"]

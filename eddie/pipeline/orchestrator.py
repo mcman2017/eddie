@@ -70,7 +70,8 @@ from eddie.pipeline.witness import WitnessJob, run_witness
 from eddie.planner.chapters import chapter_facts, short_title
 from eddie.state.artifacts import ArtifactStore
 
-PHASES = ("calibrate", "full-atlas")
+PHASES = ("calibrate", "full-atlas", "repair")
+REPAIR_ATTEMPTS = 3  # high-effort attempts the repair phase adds for a flagship with no verified witness
 TRIAGE_MAX = 4_096
 ARBITER_MAX = 8_192
 R4_MAX = 16_384
@@ -545,6 +546,16 @@ def awaiting_review(step: sqlite3.Row) -> bool:
         return False
 
 
+async def _witness_job(ctx: RunContext, plan: PillarPlan, target: DeclRef, *, calibration_draft: bool) -> WitnessJob:
+    gloss = ((await _gloss(ctx, target.full_name)) or {}).get("gloss")
+    con = ctx.cone()
+    try:
+        return WitnessJob(f"witness:{target.full_name}", plan.slug, card(con, target.id), gloss,
+                          neighbours(con, target.id), calibration_draft=calibration_draft)
+    finally:
+        con.close()
+
+
 async def witness(ctx: RunContext, plan: PillarPlan, target: DeclRef, *, calibration_draft: bool) -> None:
     key = f"witness:{target.full_name}"
     step = await ctx.write(lambda: ctx.store.ensure_step(phase=ctx.opts.phase, step_key=key, tag=key, kind="witness",
@@ -552,12 +563,7 @@ async def witness(ctx: RunContext, plan: PillarPlan, target: DeclRef, *, calibra
                                                          source=ctx.source))
     if step["status"] == "done" and not awaiting_review(step):
         return
-    con = ctx.cone()
-    try:
-        job = WitnessJob(key, plan.slug, card(con, target.id), ((await _gloss(ctx, target.full_name)) or {}).get("gloss"),
-                         neighbours(con, target.id), calibration_draft=calibration_draft)
-    finally:
-        con.close()
+    job = await _witness_job(ctx, plan, target, calibration_draft=calibration_draft)
     await ctx.write(lambda: ctx.store.mark_step(key, "running"))
     try:
         result = await run_witness(ctx, job)
@@ -566,6 +572,89 @@ async def witness(ctx: RunContext, plan: PillarPlan, target: DeclRef, *, calibra
         await ctx.write(lambda: ctx.store.mark_step(key, "failed", error=error))
         return
     await ctx.write(lambda: ctx.store.mark_step(key, "done", result=result))
+
+
+def unverified_flagships(con: sqlite3.Connection, source: str) -> list[tuple[str, str]]:
+    """(chapter slug, declaration) of every finished witness step whose declaration has no verified render."""
+    verified = {r[0] for r in con.execute(
+        "SELECT DISTINCT decl_full_name FROM witness_attempts WHERE source = ? AND outcome = 'verified'", (source,))}
+    return [(r[0], r[1]) for r in con.execute(
+        "SELECT pillar_slug, decl_full_name FROM pipeline_steps WHERE kind = 'witness' AND status = 'done' AND source = ? "
+        "ORDER BY id", (source,)) if r[1] not in verified]
+
+
+def flagship_ref(sel: Selection, plan: PillarPlan, decl: str) -> DeclRef | None:
+    pool = [*plan.chokepoints, *([plan.gate] if plan.gate else []), *plan.triage,
+            *([sel.main_theorem] if sel.main_theorem else [])]
+    return next((d for d in pool if d.full_name == decl), None)
+
+
+async def repair_witness(ctx: RunContext, plan: PillarPlan, target: DeclRef) -> bool:
+    """Up to REPAIR_ATTEMPTS more high-effort attempts for one flagship; True when it ends verified."""
+    key = f"repair:{target.full_name}"
+    step = await ctx.write(lambda: ctx.store.ensure_step(phase=ctx.opts.phase, step_key=key, tag=key, kind="repair",
+                                                         pillar_slug=plan.slug, decl_full_name=target.full_name,
+                                                         source=ctx.source))
+    if step["status"] == "done" and not awaiting_review(step):
+        return bool(json.loads(step["result"] or "{}").get("verified"))
+    prior = await ctx.attempts(target.full_name)
+    draft = any(a["origin"] == "calibration_draft" for a in prior)  # keeps the attempt numbering of the first run
+    job = await _witness_job(ctx, plan, target, calibration_draft=draft)
+    await ctx.write(lambda: ctx.store.mark_step(key, "running"))
+    try:
+        result = await run_witness(ctx, job, extra=REPAIR_ATTEMPTS)
+    except StepFailed as exc:
+        error = str(exc)
+        await ctx.write(lambda: ctx.store.mark_step(key, "failed", error=error))
+        return False
+    await ctx.write(lambda: ctx.store.mark_step(key, "done", result=result))
+    return bool(result.get("verified"))
+
+
+async def repair(ctx: RunContext) -> None:
+    """The repair phase: more high-effort attempts for every flagship that still has no verified witness.
+
+    A chapter whose flagship verifies here is written again by R4: the chapter in place was written around a
+    figure R2 had rejected. Pillars run concurrently; within one, flagships go in turn and R4 runs once.
+    """
+    def read() -> tuple[list[tuple[str, str]], set[str]]:
+        with ctx.store.read() as con:
+            todo = unverified_flagships(con, ctx.source)
+            owed = {r[0] for r in con.execute(  # repaired in an earlier run that stopped before its chapter
+                "SELECT pillar_slug, result FROM pipeline_steps WHERE kind = 'repair' AND status = 'done' AND source = ?",
+                (ctx.source,)) if json.loads(r[1] or "{}").get("verified")}
+        return todo, owed
+
+    todo, owed = await ctx.write(read)
+    by_slug: dict[str, list[str]] = {slug: [] for slug in owed}
+    for slug, decl in todo:
+        by_slug.setdefault(slug, []).append(decl)
+    if ctx.opts.only:
+        by_slug = {s: d for s, d in by_slug.items() if s == ctx.opts.only}
+    plans = {p.slug: p for p in ctx.selection.pillars}
+
+    async def pillar(slug: str, decls: list[str]) -> None:
+        plan = plans.get(slug)
+        if plan is None:
+            ctx.log(f"repair: chapter {slug} is not in the current selection; skipped")
+            return
+        verified = slug in owed
+        for decl in decls:
+            target = flagship_ref(ctx.selection, plan, decl)
+            if target is None:
+                ctx.log(f"repair: {decl} is not in chapter {slug} of the current selection; skipped")
+                continue
+            verified = await repair_witness(ctx, plan, target) or verified
+        if verified:
+            await consolidate(ctx, plan, key=f"r4:{slug}:repair")
+
+    async def guarded(slug: str, decls: list[str]) -> None:
+        try:
+            await pillar(slug, decls)
+        except StopRun:
+            pass  # the flag is set; every other pillar stops at its next call
+
+    await asyncio.gather(*(guarded(s, d) for s, d in by_slug.items()))
 
 
 async def arbiter(ctx: RunContext, plan: PillarPlan, target: DeclRef) -> None:
@@ -660,8 +749,8 @@ def _facts_text(f: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
-async def consolidate(ctx: RunContext, plan: PillarPlan) -> None:
-    key = f"r4:{plan.slug}"
+async def consolidate(ctx: RunContext, plan: PillarPlan, *, key: str | None = None) -> None:
+    key = key or f"r4:{plan.slug}"  # the repair phase rewrites a chapter under its own key
     step = await ctx.write(lambda: ctx.store.ensure_step(phase=ctx.opts.phase, step_key=key, tag=key, kind="consolidate",
                                                          pillar_slug=plan.slug, source=ctx.source))
     if step["status"] == "done":
@@ -807,6 +896,9 @@ async def run_pillar(ctx: RunContext, plan: PillarPlan, *, calibrate: bool) -> N
 
 
 async def execute(ctx: RunContext) -> None:
+    if ctx.opts.phase == "repair":
+        await repair(ctx)
+        return
     calibrate = ctx.opts.phase == "calibrate"
     probe_keys = [s["step_key"] for s in ctx.store.steps("calibrate") if s["kind"] == "call" and s["step_key"].startswith("probe:")
                   and s["status"] == "done"]

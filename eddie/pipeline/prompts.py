@@ -68,6 +68,17 @@ matplotlib, math and json, and do not read files or use the network.
 Return JSON: title, caption (one or two sentences), relation (special_case_check | numerical_illustration | analogy),
 python_source."""
 
+# Said once more, in the user prompt, on a repair pass: every earlier attempt at this plot was rejected.
+REPAIR_PASS = (
+    "This is a repair pass: every earlier attempt at this plot was rejected, for the reasons listed below. "
+    "Prefer the simplest plot that shows the idea honestly: one panel unless two are essential, few series, "
+    "short axis labels, and a title well under 60 characters, so nothing is clipped or overlaps. Every number "
+    "the figure shows (annotations, labels, legend entries) must be formatted from values the script computes, "
+    "and written to witness.json, never typed in. The caption is written before the script runs, so keep exact "
+    "values out of it unless the script computes exactly that value, and never claim more points, zeros or cases "
+    "than the plot shows."
+)
+
 REPAIR = (
     "Your previous attempt and what was wrong with it follow. Fix every defect listed and keep what worked. "
     "Return the whole corrected script."

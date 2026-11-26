@@ -408,3 +408,60 @@ def test_a_retry_after_a_cut_off_review_is_a_fresh_call(world):
     tags = rows(settings.ledger_path, "SELECT tag FROM calls WHERE state = 'settled' AND tag LIKE 'd3:%'")
     assert len(tags) == len(set(tags)) == len(fake.bodies)  # two calls, two tags, each paid once
 
+
+def test_the_repair_phase_retries_unverified_flagships_and_rewrites_their_chapter(world):
+    data, runner = world
+    sel = select(data / "index" / "eddie_cone.sqlite", data / "index" / "eddie_index.sqlite")
+    main = sel.pillar(sel.main_slug)
+    gate = main.gate
+    assert gate is not None and gate.id != sel.main_theorem.id
+    state = {"run": 1, "reviews": 0}
+
+    def about_gate(body) -> bool:
+        return gate.full_name in json.dumps(body.get("input", "")) and body["max_output_tokens"] > 128
+
+    def rule(body, n):
+        if not (about_gate(body) and "input_image" in json.dumps(body.get("input", ""))):
+            return None
+        state["reviews"] += 1
+        k = state["reviews"]
+        if state["run"] == 1 or k == 4:  # R2 rejects all three first attempts, and the first repair attempt
+            return httpx.Response(200, json=ok_payload(body, json.dumps({
+                "verdict": "rejected", "legibility": 1, "faithfulness": 2, "defects": [f"defect {k}"],
+                "fixes": [f"fix {k}"], "summary": f"rejected {k}"})))
+        return None  # the rehearsal critic verifies
+
+    fake = FakeEmber(rule)
+    settings, factory = live(fake, EDDIE_DATA_DIR=data)
+    assert run(settings, RunOptions(phase="calibrate"), sandbox=runner, gateway_factory=factory, log=quiet).stopped is None
+    db = data / "state" / "eddie_artifacts.sqlite"
+    attempts = "SELECT attempt, origin, effort, outcome FROM witness_attempts WHERE decl_full_name = ? ORDER BY attempt"
+    assert [a[3] for a in rows(db, attempts, gate.full_name)] == ["rejected"] * 3
+    main_before = rows(db, attempts, sel.main_theorem.full_name)
+    chapter_before = rows(db, "SELECT response_id FROM chapters WHERE pillar_slug = ?", main.slug)[0][0]
+
+    fc = forecast(settings, RunOptions(phase="repair"))  # $0: priced before anything is sent
+    assert fc.lines["R1.worker"].calls == 3 and fc.lines["R2.critic"].calls == 3
+    assert fc.lines["R4.consolidator"].calls == 2 and 0 < fc.expected_nano < fc.worst_nano
+
+    state["run"] = 2
+    before = len(fake.bodies)
+    summary = run(settings, RunOptions(phase="repair"), sandbox=runner, gateway_factory=factory, log=quiet)
+    assert summary.stopped is None, summary
+    sent = fake.bodies[before:]
+    assert len(sent) == 5  # repair attempt, its review, repair attempt, its review, the chapter
+    assert rows(db, attempts, gate.full_name)[3:] == [(3, "repair", "high", "rejected"), (4, "repair", "high", "verified")]
+    workers = [json.dumps(b["input"]) for b in sent if (b.get("text") or {}).get("format", {}).get("name") == "eddie_worker"]
+    assert len(workers) == 2 and all("This is a repair pass" in w for w in workers)
+    assert all(f"defect {k}" in workers[0] for k in (1, 2, 3)) and "defect 4" not in workers[0]
+    assert all(f"defect {k}" in workers[1] for k in (1, 2, 3, 4))  # every earlier defect, not only the last
+    assert rows(db, attempts, sel.main_theorem.full_name) == main_before  # a verified flagship is left alone
+    chapter_after = rows(db, "SELECT response_id FROM chapters WHERE pillar_slug = ?", main.slug)[0][0]
+    assert chapter_after and chapter_after != chapter_before  # written again around the verified figure
+    repair_tags = rows(settings.ledger_path, "SELECT tag FROM calls WHERE tag LIKE 'd3:repair:%' AND state = 'settled'")
+    assert len(repair_tags) == len(sent) and phase_spend_nano(settings.ledger_path, "repair") > 0  # its own budget
+    assert audit(settings) == []
+    assert not forecast(settings, RunOptions(phase="repair")).lines  # nothing left to repair
+    again = run(settings, RunOptions(phase="repair"), sandbox=runner, gateway_factory=factory, log=quiet)
+    assert again.stopped is None and again.calls == 0
+
