@@ -324,3 +324,61 @@ def test_the_forecast_expects_the_measured_output_whatever_the_ceiling():
     before[0].add("R2.critic", 2_000, 2_048)
     before[1].add("R2.critic", 2_000, 4_096)
     assert before[1].expected_nano > before[0].expected_nano
+
+
+@pytest.mark.parametrize("second_opinion", ["verified", "rejected"])
+def test_a_render_whose_review_was_cut_off_is_reviewed_again_on_the_next_run(world, second_opinion):
+    data, runner = world
+    sel = select(data / "index" / "eddie_cone.sqlite", data / "index" / "eddie_index.sqlite")
+    gate = sel.pillar(sel.main_slug).gate
+    assert gate is not None and gate.id != sel.main_theorem.id
+    state = {"run": 1, "answered": False}
+
+    def gate_review(body) -> bool:
+        text = json.dumps(body.get("input", ""))
+        return body["max_output_tokens"] > 128 and "input_image" in text and gate.full_name in text
+
+    def rule(body, n):
+        if not gate_review(body):
+            return None
+        if state["run"] == 1:  # every review of the gate's render is cut off before its verdict
+            return httpx.Response(200, json=ok_payload(body, "", status="incomplete"))
+        if not state["answered"]:  # the next run's second opinion on the same render
+            state["answered"] = True
+            rejected = second_opinion == "rejected"
+            return httpx.Response(200, json=ok_payload(body, json.dumps({
+                "verdict": second_opinion, "legibility": 2, "faithfulness": 2,
+                "defects": ["the title is clipped"] if rejected else [], "fixes": ["shorten the title"] if rejected else [],
+                "summary": f"second opinion: {second_opinion}"})))
+        return None
+
+    fake = FakeEmber(rule)
+    settings, factory = live(fake, EDDIE_DATA_DIR=data)
+    first = run(settings, RunOptions(phase="calibrate"), sandbox=runner, gateway_factory=factory, log=quiet)
+    assert first.stopped is None, first  # two cut-off reviews in a row are strikes, not an abort
+    db = data / "state" / "eddie_artifacts.sqlite"
+    attempts = "SELECT attempt, outcome FROM witness_attempts WHERE decl_full_name = ? ORDER BY attempt"
+    renders = "SELECT id, status, supersedes_id FROM witnesses WHERE decl_full_name = ? ORDER BY id"
+    assert rows(db, attempts, gate.full_name) == [(0, "critic_unusable")]
+    assert [r[1] for r in rows(db, renders, gate.full_name)] == ["pending"]
+
+    state["run"] = 2
+    before = len(fake.bodies)
+    second = run(settings, RunOptions(phase="calibrate"), sandbox=runner, gateway_factory=factory, log=quiet)
+    assert second.stopped is None, second
+    sent = fake.bodies[before:]
+    witnesses = rows(db, renders, gate.full_name)
+    if second_opinion == "verified":
+        assert rows(db, attempts, gate.full_name) == [(0, "verified")]
+        assert [w[1] for w in witnesses] == ["verified"] and len(sent) == 1  # one review; nothing redrawn
+    else:
+        assert rows(db, attempts, gate.full_name) == [(0, "rejected"), (1, "verified")]
+        assert [w[1] for w in witnesses] == ["rejected", "verified"] and witnesses[1][2] == witnesses[0][0]
+        assert len(sent) == 3  # the review, one repaired script, its review
+        assert "shorten the title" in json.dumps(sent[1].get("input", ""))  # R2's critique reached the repair
+    second_review = rows(db, "SELECT response_id FROM reviews WHERE region = 'R2.critic' AND witness_id = ?", witnesses[0][0])
+    assert second_review and second_review[0][0]  # an audited review of the same render
+    assert audit(settings) == []
+    third = run(settings, RunOptions(phase="calibrate"), sandbox=runner, gateway_factory=factory, log=quiet)
+    assert third.stopped is None and third.calls == 0  # nothing is pending any more: nothing is called
+

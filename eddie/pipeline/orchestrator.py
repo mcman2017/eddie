@@ -535,12 +535,20 @@ async def choose_flagships(ctx: RunContext, plan: PillarPlan, *, calibrate: bool
     return picks
 
 
+def awaiting_review(step: sqlite3.Row) -> bool:
+    """A witness step that ended on a render R2 never judged (its review was cut off) is reopened."""
+    try:
+        return bool(json.loads(step["result"] or "{}").get("pending"))
+    except (TypeError, ValueError):
+        return False
+
+
 async def witness(ctx: RunContext, plan: PillarPlan, target: DeclRef, *, calibration_draft: bool) -> None:
     key = f"witness:{target.full_name}"
     step = await ctx.write(lambda: ctx.store.ensure_step(phase=ctx.opts.phase, step_key=key, tag=key, kind="witness",
                                                          pillar_slug=plan.slug, decl_full_name=target.full_name,
                                                          source=ctx.source))
-    if step["status"] == "done":
+    if step["status"] == "done" and not awaiting_review(step):
         return
     con = ctx.cone()
     try:

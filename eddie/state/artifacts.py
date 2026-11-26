@@ -513,6 +513,16 @@ class ArtifactStore:
             )
             return int(cur.lastrowid)
 
+    def review_attempt(self, attempt_id: int, *, outcome: str, critique: list[str] | None, critic_call_id: str | None,
+                       critic_response_id: str | None, con: sqlite3.Connection | None = None) -> None:
+        """An attempt whose render was reviewed again (the first review was cut off) takes R2's answer."""
+        with self._use(con) as c:
+            c.execute(
+                "UPDATE witness_attempts SET outcome = ?, critique = ?, critic_call_id = ?, critic_response_id = ? WHERE id = ?",
+                (outcome, json.dumps(critique) if critique is not None else None, critic_call_id, critic_response_id,
+                 attempt_id),
+            )
+
     def record_call(self, *, call_id: str, backend: str, region: str, effort: str, step_key: str | None, tag: str | None,
                     response_id: str | None, status: str | None, input_tokens: int, cached_tokens: int,
                     output_tokens: int, reasoning_tokens: int, cost_nano: int, shadow_nano: int,
