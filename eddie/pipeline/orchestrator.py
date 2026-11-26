@@ -588,14 +588,19 @@ def triage_depth(opts: RunOptions) -> int:
 
 async def expansion_flagships(ctx: RunContext, plan: PillarPlan) -> list[DeclRef]:
     """Up to --expand-witnesses new flagships for a chapter: triaged declarations that triage found drawable
-    (visualizability 2 or 3) and that have no witness yet, most drawable first, then by dominator mass. The picks
-    are recorded, so a resumed run continues the same ones instead of choosing more."""
+    (visualizability 2 or 3) and that have no witness yet, most drawable first, then by dominator mass.
+
+    The picks are recorded, so a resumed run continues the same ones. A chapter that had fewer drawable
+    declarations than asked for is topped up when a deeper triage finds more; at the same depth a rerun finds
+    nothing new and chooses nothing."""
     key = f"expand-picks:{plan.slug}"
     step = await ctx.write(lambda: ctx.store.ensure_step(phase=ctx.opts.phase, step_key=key, tag=key, kind="picks",
                                                          pillar_slug=plan.slug, source=ctx.source))
     refs = {d.full_name: d for d in plan.triage}
-    if step["status"] == "done":
-        return [refs[n] for n in json.loads(step["result"] or "{}").get("picks", []) if n in refs]
+    want = max(0, ctx.opts.expand_witnesses)
+    recorded: list[str] = json.loads(step["result"] or "{}").get("picks", []) if step["status"] == "done" else []
+    if step["status"] == "done" and len(recorded) >= want:
+        return [refs[n] for n in recorded if n in refs]
 
     def taken() -> set[str]:
         with ctx.store.read() as con:
@@ -603,7 +608,7 @@ async def expansion_flagships(ctx: RunContext, plan: PillarPlan) -> list[DeclRef
                 "SELECT DISTINCT decl_full_name FROM pipeline_steps WHERE kind IN ('witness', 'repair') "
                 "AND decl_full_name IS NOT NULL")}
 
-    have = await ctx.write(taken)
+    have = await ctx.write(taken) | set(recorded)
     scored = []
     for d in plan.triage:
         if d.full_name in have or d.is_root:
@@ -612,9 +617,10 @@ async def expansion_flagships(ctx: RunContext, plan: PillarPlan) -> list[DeclRef
         if (g.get("visualizability") or 0) >= 2:
             scored.append((g["visualizability"], d.dom_mass, -d.id, d))
     scored.sort(key=lambda s: (s[0], s[1], s[2]), reverse=True)
-    picks = [s[3] for s in scored[: max(0, ctx.opts.expand_witnesses)]]
-    await ctx.write(lambda: ctx.store.mark_step(key, "done", result={"picks": [d.full_name for d in picks]}))
-    return picks
+    names = recorded + [s[3].full_name for s in scored[: want - len(recorded)]]
+    if names != recorded or step["status"] != "done":
+        await ctx.write(lambda: ctx.store.mark_step(key, "done", result={"picks": names}))
+    return [refs[n] for n in names if n in refs]
 
 
 async def expand(ctx: RunContext) -> None:
