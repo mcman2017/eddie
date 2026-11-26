@@ -1,6 +1,7 @@
 # Default deny; only ingress-nginx may reach the pod; egress is DNS only (the pod calls nothing).
-# Deploy night: confirm how ingress-nginx and kubelet probe traffic is sourced on this
-# cluster (hostNetwork controllers need an ipBlock for the node subnet).
+# This assumes ingress-nginx runs as ordinary pods: a controller on hostNetwork sends from node
+# addresses, and would need an ipBlock for the node subnet instead of the namespaceSelector.
+# kube-router lets kubelet probes through (traffic from the pod's own node is always allowed).
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -48,3 +49,24 @@ spec:
           port: 53
         - protocol: TCP
           port: 53
+---
+# cert-manager's HTTP-01 solver pod runs in this namespace while the certificate is issued or
+# renewed; without this, the default deny drops the ACME challenge and TLS never comes up.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-acme-solver-ingress
+spec:
+  podSelector:
+    matchLabels:
+      acme.cert-manager.io/http01-solver: "true"
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: ingress-nginx
+      ports:
+        - protocol: TCP
+          port: 8089
