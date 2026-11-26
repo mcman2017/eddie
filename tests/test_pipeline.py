@@ -382,3 +382,29 @@ def test_a_render_whose_review_was_cut_off_is_reviewed_again_on_the_next_run(wor
     third = run(settings, RunOptions(phase="calibrate"), sandbox=runner, gateway_factory=factory, log=quiet)
     assert third.stopped is None and third.calls == 0  # nothing is pending any more: nothing is called
 
+
+def test_a_retry_after_a_cut_off_review_is_a_fresh_call(world):
+    data, runner = world
+    sel = select(data / "index" / "eddie_cone.sqlite", data / "index" / "eddie_index.sqlite")
+    gate = sel.pillar(sel.main_slug).gate
+    reviews: list[int] = []
+
+    def rule(body, n):
+        text = json.dumps(body.get("input", ""))
+        if body["max_output_tokens"] > 128 and "input_image" in text and gate.full_name in text:
+            reviews.append(n)
+            if len(reviews) == 1:  # only the first review of the gate's render is cut off
+                return httpx.Response(200, json=ok_payload(body, "", status="incomplete"))
+        return None
+
+    fake = FakeEmber(rule)
+    settings, factory = live(fake, EDDIE_DATA_DIR=data)
+    summary = run(settings, RunOptions(phase="calibrate"), sandbox=runner, gateway_factory=factory, log=quiet)
+    assert summary.stopped is None, summary
+    assert len(reviews) == 2  # the retry went to the model; it did not read the cut-off answer back
+    db = data / "state" / "eddie_artifacts.sqlite"
+    assert rows(db, "SELECT attempt, outcome FROM witness_attempts WHERE decl_full_name = ? ORDER BY attempt",
+                gate.full_name) == [(0, "verified")]
+    tags = rows(settings.ledger_path, "SELECT tag FROM calls WHERE state = 'settled' AND tag LIKE 'd3:%'")
+    assert len(tags) == len(set(tags)) == len(fake.bodies)  # two calls, two tags, each paid once
+

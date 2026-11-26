@@ -311,7 +311,8 @@ class RunContext:
         k = int(slot["attempts"])
         if k > 0 and slot["status"] != "failed" and slot_key not in self._reused:
             # A settled, journaled answer from an earlier run (or from before a crash) is reused, never
-            # paid for again. Each slot is reused at most once per run, so a retry makes a fresh call.
+            # paid for again. A slot is read back at most once per run, and never once this run has
+            # called it: a retry after an unusable answer is a fresh call, not the same answer again.
             recovered = await asyncio.to_thread(self._recover, make_tag(self.opts.phase, slot_key, k - 1), schema)
             if recovered is not None:
                 self._reused.add(slot_key)
@@ -325,6 +326,7 @@ class RunContext:
         req = self.caller.build(step_key=slot_key, attempt=k, region=region, effort=effort, max_output=max_output,
                                 instructions=instructions, parts=parts, schema=schema, summary=summary)
         res = await self._send(req, slot_key, schema)
+        self._reused.add(slot_key)
         self.calls += 1
         self.cost_nano += res.cost_nano
         if res.status == "completed":
