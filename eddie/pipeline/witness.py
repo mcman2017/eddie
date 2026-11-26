@@ -14,8 +14,10 @@ from __future__ import annotations
 import asyncio
 import io
 import json
+import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
+from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any
 
 from eddie.pipeline import prompts
@@ -28,7 +30,9 @@ if TYPE_CHECKING:
 
 WORKER_MAX = 12_288
 WORKER_MAX_HIGH = 16_384
-CRITIC_MAX = 2_048
+# The region's ceiling. On the live calibrate run reasoning was 80-100% of every R2 reply, and at
+# 2,048 one review spent 2,046 tokens reasoning and was cut off before its verdict.
+CRITIC_MAX = 4_096
 CRITIC_MAX_SIDE = 1_280
 STDERR_TAIL = 1_200
 
@@ -86,6 +90,52 @@ def fit_for_critic(png: bytes) -> bytes:
         return buf.getvalue()
 
 
+async def re_review(ctx: RunContext, job: WitnessJob, att: sqlite3.Row) -> Any | None:
+    """Review a render again whose R2 review was cut off before its verdict.
+
+    The render, its script and its caption stay as they are; only the review is repeated, at CRITIC_MAX.
+    R2's answer goes to the same witness and attempt, with its own audited review row. Returns the
+    verdict, or None when R2 still gave no usable answer (the render stays pending).
+    """
+    decl, wid = job.target.full_name, int(att["witness_id"])
+
+    def read() -> sqlite3.Row:
+        with ctx.store.read() as con:
+            return con.execute("SELECT artifact_sha256, ext FROM witnesses WHERE id = ?", (wid,)).fetchone()
+
+    row = await ctx.write(read)
+    png = await asyncio.to_thread((ctx.paths.artifacts / f"{row['artifact_sha256']}.{row['ext']}").read_bytes)
+    out = SimpleNamespace(title=att["title"], caption=att["caption"], relation=att["relation"])
+    qc = json.loads(att["qc"]) if att["qc"] else {}
+    await ctx.activity("R2.critic", decl, f"reviewing witness attempt {att['attempt'] + 1} again")
+    cres = await ctx.call_slot(
+        f"{job.step_key}:c{att['attempt']}:again", region="R2.critic", effort="medium", max_output=CRITIC_MAX,
+        instructions=prompts.CRITIC, parts=[text_part(critic_prompt(job, out, qc)), image_part(fit_for_critic(png))],
+        schema="critic", retries=1,
+    )
+    if not cres.ok:
+        return None
+    if ctx.source == "ember" and not cres.response_id:
+        from eddie.pipeline.orchestrator import StepFailed  # the orchestrator imports this module
+
+        raise StepFailed("an Ember reply without a response id cannot be stored as Ember output")
+    v = cres.data
+    critique = [*v.defects, *(f"fix: {f}" for f in v.fixes)] or None
+
+    def tx() -> None:
+        with ctx.store.tx() as con:
+            ctx.store.update_witness(wid, status=v.verdict, defects=list(v.defects) if v.verdict == "rejected" else [],
+                                     critic_verdict=v.model_dump(), con=con)
+            ctx.store.add_review(region="R2.critic", verdict=v.verdict, source=ctx.source, witness_id=wid,
+                                 decl_full_name=decl, reasons=[*v.defects, *(f"fix: {f}" for f in v.fixes), v.summary],
+                                 call_id=cres.call_id, response_id=cres.response_id, con=con)
+            ctx.store.review_attempt(int(att["id"]), outcome=v.verdict, critique=critique, critic_call_id=cres.call_id,
+                                     critic_response_id=cres.response_id, con=con)
+
+    await ctx.write(tx)
+    return v
+
+
 async def run_witness(ctx: RunContext, job: WitnessJob) -> dict[str, Any]:
     decl = job.target.full_name
     prior = await ctx.attempts(decl)
@@ -98,6 +148,15 @@ async def run_witness(ctx: RunContext, job: WitnessJob) -> dict[str, Any]:
         previous_code = a["python_source"] or previous_code
         critique = json.loads(a["critique"]) if a["critique"] else critique
         previous_witness = a["witness_id"] or previous_witness
+    last = prior[-1] if prior else None
+    if last is not None and last["outcome"] == "critic_unusable" and last["witness_id"] is not None:
+        # the last render was never judged (its review was cut off): review it before drawing anything new
+        verdict = await re_review(ctx, job, last)
+        if verdict is None:
+            return {"verified": None, "pending": last["witness_id"], "attempts": len(prior)}
+        if verdict.verdict == "verified":
+            return {"verified": last["witness_id"], "attempts": len(prior)}
+        critique = [*verdict.defects, *(f"fix: {f}" for f in verdict.fixes)] or None  # repaired as usual
     plan = schedule(job.calibration_draft)
     for n in range(len(prior), len(plan)):
         origin, effort, max_out = plan[n]

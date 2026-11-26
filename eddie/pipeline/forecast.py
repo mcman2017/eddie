@@ -3,8 +3,10 @@
 Requests whose inputs are known now (probes, triage batches, the gate audits, the chapters'
 structure) are built exactly as the run would build them and sized with the governor's own
 estimator. Inputs that only exist later (a gloss, a script, a critique) are taken at their caps,
-which is what keeps the worst case a hard bound. The expected cost uses the ratios the ledger
-measured on earlier pipeline calls of the same region, or stated defaults before calibrate.
+which is what keeps the worst case a hard bound. The expected cost uses what the ledger measured on
+earlier pipeline calls of the same region: the input ratio, and the mean output in tokens (capped
+at the call's ceiling; a reasoning reply does not grow when its ceiling is raised). Before
+calibrate it uses stated ratios.
 Nothing here constructs a gateway or writes any ledger.
 """
 
@@ -42,7 +44,6 @@ from eddie.pipeline.orchestrator import (
     _facts_text,
     _triage_prompt,
     batch_key,
-    ledger_path_for,
     phase_spend_nano,
 )
 from eddie.pipeline.select import open_cone, select
@@ -85,16 +86,20 @@ class Forecast:
     phase_spent_nano: int = 0
     daily_headroom_nano: int | None = None
     lifetime_headroom_nano: int | None = None
-    measured: dict[str, tuple[float, float]] = field(default_factory=dict)
+    measured: dict[str, tuple[float, float]] = field(default_factory=dict)  # region -> (input ratio, mean output tokens)
     skipped_done: int = 0
 
     def add(self, region: str, bound: int, max_out: int, *, weight: float = 1.0, worst: bool = True) -> None:
         line = self.lines.setdefault(region, Line(region))
-        r_in, r_out = self.measured.get(region, (DEFAULT_IN.get(region, 0.33), DEFAULT_OUT.get(region, 0.5)))
+        if region in self.measured:
+            r_in, mean_out = self.measured[region]
+            out = min(max_out, round(mean_out))
+        else:
+            r_in, out = DEFAULT_IN.get(region, 0.33), round(max_out * DEFAULT_OUT.get(region, 0.5))
         if worst:
             line.calls += 1
             line.worst_nano += pricing.reserve_nano(bound, max_out)
-        line.expected_nano += int(weight * pricing.cost_nano(max(1, round(bound * r_in)), 0, round(max_out * r_out)))
+        line.expected_nano += int(weight * pricing.cost_nano(max(1, round(bound * r_in)), 0, out))
 
     @property
     def worst_nano(self) -> int:
@@ -121,7 +126,7 @@ def measured_ratios(ledger: Path) -> dict[str, tuple[float, float]]:
     con = sqlite3.connect(f"file:{ledger}?mode=ro", uri=True)
     try:
         rows = con.execute(
-            "SELECT region, AVG(1.0 * input_tokens / est_input), AVG(1.0 * output_tokens / max_output), COUNT(*) "
+            "SELECT region, AVG(1.0 * input_tokens / est_input), AVG(1.0 * output_tokens), COUNT(*) "
             "FROM calls WHERE state = 'settled' AND tag LIKE ? AND est_input > 0 AND max_output > 128 GROUP BY region",
             (f"{TAG_PREFIX}:%",),
         ).fetchall()
@@ -172,7 +177,7 @@ def forecast(settings: Settings, opts: RunOptions) -> Forecast:
     paths_ = RunPaths.for_settings(settings, live=True, db=opts.db)
     fc = Forecast(opts.phase, run_cap_nano=settings.run_cap_nano)
     fc.measured = measured_ratios(settings.ledger_path)
-    fc.phase_spent_nano = phase_spend_nano(ledger_path_for(settings), opts.phase)
+    fc.phase_spent_nano = phase_spend_nano(settings.ledger_path, opts.phase)  # money is spent only there
     fc.daily_headroom_nano, fc.lifetime_headroom_nano = headroom(settings)
     sel = select(paths_.cone, paths_.index, plan_path=paths_.plan)
     done = done_steps(paths_.db)

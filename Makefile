@@ -49,6 +49,7 @@ sandbox-image: ## the container that model-written witness scripts run in (no ne
 
 rehearse: ## $0 end-to-end calibrate on the mock backend, into data/state/rehearsal.sqlite
 	EDDIE_BACKEND=mock $(PY) -m eddie.cli run-ember --phase calibrate
+	$(PY) -m eddie.cli run-ember status --db data/state/rehearsal.sqlite
 
 VOICE ?= am_michael
 narration: ## render the visual tour's voice-over to web/public/audio/tour/ (Kokoro, local CPU, $0)

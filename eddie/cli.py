@@ -593,7 +593,8 @@ def cmd_run_ember(args: argparse.Namespace) -> int:
         if args.json:
             _out(json.dumps(report, indent=2, default=str))
             return 0
-        _out(f"run-ember     {report['db']}  (backend {settings.backend})")
+        label = "live database" if report.get("kind") == "live" else "not the live database"
+        _out(f"run-ember     {report['db']}  ({label}; spend from the ledger)")
         for phase, info in report.get("phases", {}).items():
             steps = ", ".join(f"{kind} " + "/".join(f"{n} {st}" for st, n in sorted(c.items()))
                               for kind, c in sorted(info["steps"].items()) if kind != "call")
