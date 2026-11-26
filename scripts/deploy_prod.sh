@@ -23,6 +23,8 @@ PY="$ROOT/.venv/bin/python"
 KUBECTL="${KUBECTL:-kubectl}"
 DOCKER="${DOCKER:-docker}"
 LOADER="eddie-loader"
+SYNC_ID=""      # the release being shipped; a failed sync removes it from the volume
+SYNC_SWAPPED=0
 WEB_SELECTOR="app.kubernetes.io/name=eddie,app.kubernetes.io/component=web"
 
 say() { printf '%s\n' "$*" >&2; }
@@ -210,6 +212,8 @@ cmd_apply() {
   rendered | k apply -f - --dry-run=server >/dev/null
   rendered | k diff -f - || true
   confirm "Apply this to $KUBE_CONTEXT?" || die "not confirmed"
+  # the pull secret goes in first when it can, so the first image pull does not fail and back off
+  if k get namespace "$NAMESPACE" >/dev/null 2>&1; then copy_pull_secret; fi
   rendered | k apply -f - --server-side --field-manager=eddie-deploy >/dev/null
   copy_pull_secret
   kn rollout status deploy/eddie-web --timeout=240s
@@ -233,6 +237,13 @@ for db in dbs:
 print(f"read-only open: {len(dbs)} databases ok")
 EOF
 }
+
+# run inside the loader, in /data: never touches the live release
+PRUNE_RELEASES='cd /data/releases || exit 1
+cur="$(basename "$(readlink /data/current)")"
+for d in */; do d="${d%/}"; [ "$d" = "$cur" ] || [ -e "$d/.complete" ] || rm -rf "./$d"; done
+ls -1t | grep -vxF "$cur" | tail -n +2 | while IFS= read -r d; do rm -rf "./$d"; done
+exit 0'
 
 loader_manifest() {
   local node="$1" image="$IMAGE_REPO:$IMAGE_TAG"
@@ -277,6 +288,24 @@ spec:
 EOF
 }
 
+# partition_manifest REMOTE LOCAL CHANGED UNCHANGED: a file whose "sha256  path" line the live
+# release already has is linked inside the volume; everything else is sent. FILENAME, not NR == FNR:
+# on a first sync REMOTE is empty, and NR == FNR would then hold for every line of LOCAL.
+partition_manifest() {
+  awk -v changed="$3" -v unchanged="$4" '
+    FILENAME == ARGV[1] { have[$0] = 1; next }
+    { if (($0 in have) && $2 != "MANIFEST.sha256") print $2 > unchanged; else print $2 > changed }
+  ' "$1" "$2"
+  touch "$3" "$4"
+}
+
+sync_cleanup() {  # EXIT trap: a release that never went live is removed, then the loader
+  if [[ -n "$SYNC_ID" && "$SYNC_SWAPPED" != 1 ]]; then
+    kn exec "$LOADER" -- rm -rf "/data/releases/$SYNC_ID" >/dev/null 2>&1 || true
+  fi
+  kn delete pod "$LOADER" --ignore-not-found --wait=false >/dev/null 2>&1 || true
+}
+
 cmd_sync() {
   load_env
   [[ -n "$IMAGE_TAG" ]] || die "no IMAGE_TAG: run scripts/deploy_prod.sh image first"
@@ -288,25 +317,26 @@ cmd_sync() {
   node="$(kn get pod -l "$WEB_SELECTOR" -o jsonpath='{.items[0].spec.nodeName}' 2>/dev/null || true)"
   kn delete pod "$LOADER" --ignore-not-found --wait=true >/dev/null
   loader_manifest "$node" | kn create -f - >/dev/null
-  trap 'kn delete pod "$LOADER" --ignore-not-found --wait=false >/dev/null 2>&1 || true' EXIT
+  trap sync_cleanup EXIT
   kn wait --for=condition=Ready "pod/$LOADER" --timeout=240s >/dev/null
   # files whose sha256 the current release already has are hard-linked inside the volume, not sent
   local remote changed unchanged
   remote="$(mktemp)"; changed="$(mktemp)"; unchanged="$(mktemp)"
   kn exec "$LOADER" -- sh -c 'cat /data/current/MANIFEST.sha256 2>/dev/null || true' > "$remote"
-  awk 'NR == FNR { have[$0] = 1; next } { if (($0 in have) && $2 != "MANIFEST.sha256") print $2 > "'"$unchanged"'"; else print $2 > "'"$changed"'" }' \
-    "$remote" "$rel/MANIFEST.sha256"
+  partition_manifest "$remote" "$rel/MANIFEST.sha256" "$changed" "$unchanged"
   printf '%s\n' MANIFEST.sha256 RELEASE.json >> "$changed"
-  touch "$unchanged"
+  SYNC_ID="$id"
   kn exec "$LOADER" -- mkdir -p "/data/releases/$id"
   if [[ -s "$unchanged" ]]; then
     kn exec -i "$LOADER" -- sh -c "cd /data && while IFS= read -r f; do mkdir -p \"releases/$id/\$(dirname \"\$f\")\" && ln \"current/\$f\" \"releases/$id/\$f\"; done" < "$unchanged"
   fi
   sort -u "$changed" -o "$changed"
   tar -C "$rel" -cf - -T "$changed" | kn exec -i "$LOADER" -- tar -C "/data/releases/$id" -xf -
-  kn exec "$LOADER" -- sh -c "cd /data/releases/$id && sha256sum -c --quiet MANIFEST.sha256"
+  kn exec "$LOADER" -- sh -c "cd /data/releases/$id && sha256sum -c --quiet MANIFEST.sha256 && touch .complete"
   kn exec "$LOADER" -- sh -c "cd /data && ln -sfn releases/$id current.new && mv -T current.new current"
-  kn exec "$LOADER" -- sh -c 'cd /data/releases && ls -1t | tail -n +3 | xargs -r rm -rf'
+  SYNC_SWAPPED=1
+  # keep the live release and the newest complete one before it; anything partial goes
+  kn exec "$LOADER" -- sh -c "$PRUNE_RELEASES"
   say "release $id is live: $(wc -l < "$changed") files sent, $(wc -l < "$unchanged") linked from the previous release"
   rm -f "$remote" "$changed" "$unchanged"
   ls -1dt "$ROOT"/data/deploy/20*/ 2>/dev/null | tail -n +3 | xargs -r rm -rf
