@@ -498,6 +498,23 @@ def test_the_expand_phase_deepens_triage_and_draws_new_flagships_outside_the_sum
     again = run(settings, opts, sandbox=runner, gateway_factory=factory, log=quiet)
     assert again.stopped is None and again.calls == 0  # the picks are recorded: a rerun chooses no more
 
+    # a deeper triage finds more drawable declarations: chapters short of their picks are topped up, same bar
+    picks = "SELECT pillar_slug, result FROM pipeline_steps WHERE kind = 'picks'"
+    before_picks = {slug: json.loads(r)["picks"] for slug, r in rows(db, picks)}
+    deeper = RunOptions(phase="expand", expand_triage=10, expand_witnesses=2)
+    triaged, witnessed = ({r[0] for r in rows(db, q)} for q in (
+        "SELECT decl_full_name FROM triage WHERE source = 'ember'", "SELECT DISTINCT decl_full_name FROM witness_attempts"))
+    topped = run(settings, deeper, sandbox=runner, gateway_factory=factory, log=quiet)
+    assert topped.stopped is None, topped
+    after_picks = {slug: json.loads(r)["picks"] for slug, r in rows(db, picks)}
+    assert all(after_picks[s][: len(p)] == p and len(after_picks[s]) <= 2 for s, p in before_picks.items())  # kept, then added
+    assert sum(map(len, after_picks.values())) > sum(map(len, before_picks.values()))
+    assert {r[0] for r in rows(db, "SELECT decl_full_name FROM triage WHERE source = 'ember'")} > triaged
+    added = {r[0] for r in rows(db, "SELECT DISTINCT decl_full_name FROM witness_attempts")} - witnessed
+    assert added and not added & summit
+    assert audit(settings) == []
+    assert run(settings, deeper, sandbox=runner, gateway_factory=factory, log=quiet).calls == 0  # same depth: nothing new
+
 
 def test_a_time_cap_stops_before_the_next_call_and_the_run_resumes(world):
     data, runner = world
